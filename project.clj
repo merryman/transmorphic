@@ -21,5 +21,6 @@
    [org.omcljs/om "1.0.0-alpha22"]
    [org.clojure/core.async "0.1.346.0-17112a-alpha"]
    [cljs-tooling "0.1.7"]
+   [binaryage/devtools "0.5.2"]
    [org.clojure/tools.reader "1.0.0-alpha1"]]
    :main cljs-morphic.server/start-server)

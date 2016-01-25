@@ -57,18 +57,6 @@
               new-source)
     ch))
 
-; (get-file "/tran/morph/function_editor.js")
-
-
-; (defn get-file [url]
-;   (let [c (chan)
-;         req (.send XhrIo url
-;                   (fn [e]
-;                     (if (.. e -target isSuccess)
-;                       (put! c (.. e -target getResponseText))
-;                       (put! c :error))))]
-;     c))
-
 (def file-cache (atom {}))
 
 (defn extension->lang
