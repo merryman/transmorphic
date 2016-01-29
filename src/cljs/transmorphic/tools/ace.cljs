@@ -30,20 +30,6 @@
      (.. ace-instance -session (setScrollTop scroll))
      (.. ace-instance (resize true)))))
 
-(defn change-handler [{:keys [local-state] :as owner} ace-instance]
-  ; 1. get the current paredit node reference
-  ; 2. store the reference, and when a new set-value! happens,
-  ;    you first replace the whole string, and then swap out the altered nodes
-  ;    in order to preserve user changes
-  ; 3. Over time the changing nodes will start to overlap, so we merge them if this happens
-  (let [dirty-nodes (:dirty-nodes local-state)
-        ast (.. ace-instance -session -$ast)
-        cursor-idx (.. ace-instance getCursorIndex)
-        range (.. js/paredit -navigator (sexpRange ast cursor-idx))
-        [start end] (js->clj range)
-        value (.slice (.. ace-instance getValue) start end)]
-    (rerender! owner #(assoc-in % [:dirty-nodes [start end]] value))))
-
 (defn save-handler [{:keys [local-state] :as owner} ace-state]
   (let [{:keys [on-save ace-instance]} @ace-state
         v (.getValue ace-instance)]
@@ -120,12 +106,15 @@
   (let [ace-instance (.edit js/ace (model :id))]
     (.setValue ace-instance (@(model :ace-state) :value))))
 
-(defn update-save-handler! [ace-instance on-save]
+(defn set-save-handler! [ace-instance on-save]
   (.. ace-instance
       -commands
       (addCommand  (clj->js {:name "save"
                              :bindKey {:win "Ctrl-S" :mac "Ctrl-S" :sender "editor|cli"}
                              :exec #(on-save (.getValue ace-instance))}))))
+
+(defn set-change-handler! [ace-instance on-change]
+  (.. ace-instance (on "change" on-change)))
 
 (defn setup-ace! [self model]
   (let [ace-instance (.edit js/ace (model :id))
@@ -157,8 +146,6 @@
         (addCommand  (clj->js {:name "save"
                                :bindKey {:win "Ctrl-S" :mac "Ctrl-S" :sender "editor|cli"}
                                :exec #(save-handler self ace-instance)})))
-    (.. ace-instance
-        (on "change" #(change-handler self ace-instance)))
     (when (model :value) (set-value! self ace-instance (model :value)))
     (.gotoLine ace-instance (model :line) 1 true)
     (rerender! self {:edited-value (model :value)})))

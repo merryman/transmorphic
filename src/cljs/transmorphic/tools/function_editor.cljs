@@ -9,7 +9,8 @@
             [transmorphic.symbolic :refer [format-code get-external-reconciliation
                                            get-component-def]]
             [transmorphic.tools.window :refer [window]]
-            [transmorphic.tools.ace :refer [setup-ace! set-value! update-save-handler!]]
+            [transmorphic.tools.ace :refer [setup-ace! set-value! 
+                                             set-save-handler! set-change-handler!]]
             [transmorphic.repl :refer [get-ns-source]]
             [cljs.reader :refer [read-string]]
             [clojure.string :refer [join split-lines]]
@@ -22,14 +23,12 @@
               (js->clj 
                 (.. ast -children 
                     (map (fn [node]
-                           [(symbol
-                             (.. js/paredit 
-                                 -walk 
-                                 (stringify 
-                                  (-> (.. node 
-                                          -children)
-                                    (aget 1))))) 
-                            node])))))
+                           (when-let [ch (.. node -children)]
+                             [(symbol
+                               (.. js/paredit 
+                                   -walk 
+                                   (stringify (aget ch 1)))) 
+                              node]))))))
         ns-def-node (get def-nodes defn-name)]
     (when ns-def-node
       {:start (get ns-def-node "start")
@@ -153,13 +152,17 @@
                             self (.edit js/ace (props :id)) 
                             root-morph component))
                    :on-mouse-down (fn [e]
-                                    (rerender! self {:locked? true}))
+                                    (rerender! self #(update-in % [:locked?] not)))
                    :will-receive-props (fn [_]
-                                         (update-save-handler! 
-                                          (.edit js/ace (props :id))
-                                          #(save-handler self component root-morph
-                                                         (assoc abstraction-info 
-                                                                :description %))))  
+                                         (let [editor (.edit js/ace (props :id))] 
+                                           (set-change-handler!
+                                             editor
+                                             #(rerender! self {:edited-value (.getValue editor)}))
+                                           (set-save-handler! 
+                                             editor
+                                             #(save-handler self component root-morph
+                                                            (assoc abstraction-info 
+                                                                   :description %)))))  
                    :did-mount (fn [_] 
                                 (setup-ace! self props))})
              (when component
