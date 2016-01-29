@@ -22,10 +22,7 @@
   different regardless how high we walk up
   the owner chain"
   [state a b]
-  (or (orphan? b) ; orphans are always foreign
-      (and (not= (:owner a) (:owner b)) ; we have currently different owners, but we will check the owner chain
-           (when-let [o (and (:owner b) (get-in state (:owner b)))] 
-             (foreign? state a o)))))
+  (or (-> b :owner not) (not= (:owner a) (:owner b))))
 
 (defn fetch-ns-source [ns])
 
@@ -315,13 +312,11 @@
                 loc->submorph-descriptions 
                 (into {}
                       (comp 
-                       (map (fn [m]
-                              (when (not (foreign? state morph m))
-                                (if-let [comp (and (:owner m) (get-in state (:owner m)))]
-                                  [(:source-location comp)
-                                   (get-description state comp reconciler)]
-                                  [(:source-location m)
-                                 (get-description state m reconciler)]))))
+                       (map #(loop [x' %]
+                               (if (and (:owner x') (foreign? state morph x'))
+                                 (recur (get-in state (:owner x')))
+                                 [(:source-location x')
+                                  (get-description state x' reconciler)])))
                        (remove nil?))
                       submorphs)
                 own-descriptions 
@@ -338,6 +333,7 @@
                                                   loc->submorph-descriptions)]
                                    (reification args))))) 
                      submorph-locations)
+                added-submorphs (map #(get-in state [:morph/by-id %]) (:added txs))
                 added-descriptions
                 (into [] 
                       (comp
@@ -345,7 +341,7 @@
                               (when (foreign? state morph m)
                                 (get-external-reconciliation state m))))
                        (remove nil?))
-                      submorphs)]
+                      added-submorphs)]
             (concat own-descriptions added-descriptions)))]
     (case type
       :morph (reification morph (txs :props) (get-sub-descriptions (:submorphs morph)))
