@@ -19,6 +19,31 @@
 (def hand-focus (atom {:morph-id nil
                        :start-pos nil}))
 
+(defn get-current-time
+  "current time as a map"
+  []
+  (let [d  #?(:clj (java.util.Date.)
+                   :cljs (js/Date.))]
+    {:hours (.getHours d)
+     :minutes (.getMinutes d)
+     :seconds (.getSeconds d)}))
+
+(def step-cbs (atom {}))
+(def current-time (atom (get-current-time)))
+
+(def stepping? (atom true))
+
+(defn update-time []
+  (reset! current-time {:value (get-current-time)
+                        :global? true})
+  (when @stepping?
+    (doseq [[ident cb] @step-cbs]
+         (cb ident))))
+
+#?(:cljs (js/setInterval
+        update-time
+        100))
+
 (defn wants-hand-focus? [props]
   "By looking at the props of a morph,
   we can tell, wether or not it is asking
@@ -33,19 +58,25 @@
 (defn drop-meta-focus! []
   (reset! meta-focus {:morph-id nil}))
 
+(defn clean-handlers! []
+  (reset! step-cbs {}))
+
 (defn extract-event-handlers [ident props]
-  {:onKeyDown
-   (fn [e]
-     (prn "key down!")
-     (.preventDefault e)
-     (when-let [cb! (props :on-key-down)] 
-       (cb! e)))
-   :onKeyUp
-   (fn [e]
-     (prn "key up!")
-     (.preventDefault e)
-     (when-let [cb! (props :on-key-up)] 
-       (cb! e))) 
+  (when-let [stepper (:step props)]
+    (swap! step-cbs assoc ident stepper))
+  {
+  ; :onKeyDown
+  ; (fn [e]
+  ;   (prn "key down!")
+  ;   (.preventDefault e)
+  ;   (when-let [cb! (props :on-key-down)] 
+  ;     (cb! e)))
+  ; :onKeyUp
+  ; (fn [e]
+  ;   (prn "key up!")
+  ;   (.preventDefault e)
+  ;   (when-let [cb! (props :on-key-up)] 
+  ;     (cb! e))) 
    :onMouseMove 
    (fn [e]
      (.preventDefault e)
@@ -75,25 +106,3 @@
 
 
 ; STEPPING
-
-(defn get-current-time
-  "current time as a map"
-  []
-  (let [d  #?(:clj (java.util.Date.)
-                   :cljs (js/Date.))]
-    {:hours (.getHours d)
-     :minutes (.getMinutes d)
-     :seconds (.getSeconds d)}))
-
-(def step-cbs (atom []))
-(def current-time (atom (get-current-time)))
-
-(defn update-time []
-  (reset! current-time {:value (get-current-time)
-                        :global? true})
-  (for [cb @step-cbs]
-    (cb)))
-
-#?(:cljs (js/setInterval
-        update-time
-        1000))

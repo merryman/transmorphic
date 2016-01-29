@@ -2,7 +2,7 @@
   (:require-macros [cljs.core.async.macros :refer [go go-loop]]
                    [transmorphic.core :refer [defcomponent]])
   (:require [transmorphic.morph :refer [$morph position-in-world 
-                                        parent centered-in]]
+                                        centered-in]]
             [transmorphic.symbolic :refer [format-code]]
             [transmorphic.manipulation :refer [changes-on-morph track-changes! revert-tx!
                                                add-evolvement!]]
@@ -11,7 +11,7 @@
             [transmorphic.event :refer [get-client-pos get-cursor-pos]]
             [transmorphic.utils :refer [add-points]]
             [transmorphic.tools.window :refer [window window-resizer]]
-            [transmorphic.tools.ace :refer [paredit set-token-selection! set-token-value!
+            [transmorphic.tools.ace :refer [set-token-selection! set-token-value!
                                             get-numeric-token-at save-handler]]
             [transmorphic.repl :refer [morph-eval morph-eval-str read-objs 
                                        load-and-callback!]]
@@ -141,29 +141,30 @@
                                    :on-mouse-down (fn [e]
                                                     (let [tx-path (concat (model :target-ref) tx-ref)]
                                                       (revert-tx! tx-ref)))}))]
-                     [(paredit (assoc (model :ace)
-                                  :position {:x 0 :y 0}
-                                  :id (str "model-view-" (model :target-id))
-                                  :value (if model-atom
-                                           (format-code @model-atom)
-                                           "Orphaned Morph!")
-                                  :line-numbers? false
-                                  :edited? (atom false)
-                                  :extent {:x 400 :y 200}
-                                  :on-save (fn [new-model]
-                                             (swap! model-atom #(with-meta (morph-eval-str new-model) 
-                                                                  (meta %)))))
-                           "ace-inspector")
-                      (listmorph {:id "structure"
-                                  :position {:x 10 :y 210}}
-                                 (hl "Property Changes:")
-                                 (map (fn [[prop value]]
-                                        (entry (str prop " " value) [:prop-changes prop]))
-                                      (:prop-changes txs))
-                                 (hl "Structural Changes:")
-                                 (map (fn [i tx]
-                                        (entry (str (tx :op) " " (tx :idx)) [:structure i]))
-                                      (range) (:structure txs)))])})))
+                    ; [(ace (assoc (model :ace)
+                    ;               :position {:x 0 :y 0}
+                    ;               :id (str "model-view-" (model :target-id))
+                    ;               :value (if model-atom
+                    ;                       (format-code @model-atom)
+                    ;                       "Orphaned Morph!")
+                    ;               :line-numbers? false
+                    ;               :edited? (atom false)
+                    ;               :extent {:x 400 :y 200}
+                    ;               :on-save (fn [new-model]
+                    ;                         (swap! model-atom #(with-meta (morph-eval-str new-model) 
+                    ;                                               (meta %)))))
+                    ;       "ace-inspector")
+                    ;   (listmorph {:id "structure"
+                    ;               :position {:x 10 :y 210}}
+                    ;             (hl "Property Changes:")
+                    ;             (map (fn [[prop value]]
+                    ;                     (entry (str prop " " value) [:prop-changes prop]))
+                    ;                   (:prop-changes txs))
+                    ;             (hl "Structural Changes:")
+                    ;             (map (fn [i tx]
+                    ;                     (entry (str (tx :op) " " (tx :idx)) [:structure i]))
+                    ;                   (range) (:structure txs)))]
+                     )})))
 
 (defn inspect-function! [lens-ref]
   (function-inspector 

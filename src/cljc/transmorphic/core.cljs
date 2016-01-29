@@ -1,10 +1,13 @@
 (ns transmorphic.core
-  (:require-macros [transmorphic.core :refer [defmorph defcomponent]])
+  (:require-macros [transmorphic.core :refer [defmorph defcomponent]]
+                   [cljs.analyzer.macros :refer [no-warn]])
   (:require [om.core]
             [goog.dom :as gdom]
             [om.dom :as dom]
             [om.core :as om]
-            [transmorphic.event :as event :refer [extract-event-handlers]]
+            [transmorphic.repl :refer [update-ns-source! morph-eval-str]]
+            [transmorphic.event :as event :refer [extract-event-handlers
+                                                  clean-handlers!]]
             [transmorphic.symbolic :refer [get-description]]
             [clojure.string :refer [join split]]
             [clojure.set :refer [union]]
@@ -12,26 +15,42 @@
 
 (enable-console-print!)
 
-(devtools/enable-feature! :sanity-hints :dirac) ; enables additional features, :custom-formatters is enabled by default
+(devtools/enable-feature! :sanity-hints :dirac)
 (devtools/install!)
 
-; the local state, that stores which
-; of the morphs are focused through the
-; meta toolchain (halo and hand)
-; it is explicitly out of the om next db,
-; since its information is never shared
-; with other users but always relative to the
-; local user, even when real time collaboraton
-; is happening
 (def meta-focus (atom #{}))
 
-; the universe stores all information that will ever
-; be important for morphic.
-; This will also be the information that is required to
-; reliably synchronize state among participating clients
+(declare rerender! insert-component!)
 
-; Future work would be to experiment with distributed dbs
-; to not rely on a central server to 
+(def component-migration-queue (atom {}))
+(def morph-migration-queue (atom {}))
+
+(defprotocol IMorph?
+  (morph? [x]))
+
+(defprotocol IComponent?
+  (component? [x]))
+
+(defn reload-hook [args]
+  (doseq [[morph {:keys [editor new-component-name]}] @morph-migration-queue]
+    (no-warn ; find a way for the programmer to control the current props passed to the component
+            (let [comp-fn (morph-eval-str new-component-name)
+                  component (comp-fn {})]
+              ; update the owner of the morph
+              ; replace the morph with the component
+              (insert-component! morph component)))
+    (prn "Morph -> Component " (:morph-id morph))
+    (rerender! editor {:compiling? false
+                       :locked? false
+                       :ns-source nil}))
+  (reset! morph-migration-queue {})
+  
+  (doseq [[component editor-component] @component-migration-queue]
+    (rerender! editor-component {:compiling? false
+                                 :locked? false
+                                 :ns-source nil})
+    (prn "Wake up editor " (:component-id component)))
+  (reset! component-migration-queue {})) 
 
 (declare morphic-read morphic-mutate universe render-morph)
 
@@ -249,6 +268,13 @@
   [args]
   (om/build render-io args))
 
+(defmorph html
+  [{:keys [morph-id props submorphs]} owner]
+  (dom/div (html-attributes props morph-id)
+    (apply dom/div (clj->js {:style (shape-style props)})
+      (:html props)
+    (om/build-all render-morph submorphs))))
+
 (defmorph ace
   [{:keys [morph-id props submorphs]} owner]
   (dom/div (html-attributes props morph-id)
@@ -281,6 +307,8 @@
 
 ; (defmorph polygon) TBD
 
+(def history-cache (atom []))
+
 (defn update-dynamic-props! [morph cursor-pos]
   (doseq [[k v] (-> morph :props)]
     (when (-> v :dynamic?)
@@ -295,11 +323,14 @@
                (mapv #(get-morph-tree state %) submorphs))))
 
 (defn- refresh-root [state]
+  (clean-handlers!)
   (let [component (get state :root-component)
         ; {:keys [abstraction source-location parent owner props]} component
         state-tracker (atom state) ; TODO: only preserve the morphs, that are structurally altered
-        morph-tree (render-component* component state-tracker nil)]
-    (assoc @state-tracker :morph-tree morph-tree)))
+        morph-tree (render-component* component state-tracker nil)
+        new-state (assoc @state-tracker :morph-tree morph-tree)]
+    (swap! history-cache conj new-state)
+    new-state))
 
 (defn wrap-as-derived [morph]
   (fn [new-parent _ new-idx state]
@@ -308,10 +339,19 @@
           morph (assoc morph 
                        :morph-id local-morph-id
                        :parent new-parent
+                       :owner (if (= :component/by-id (-> morph :owner first))
+                                (get-in @state (:owner morph))
+                                (:owner morph))
                        :prototype [:morph/by-id (-> morph :morph-id)]
                        :submorphs (mapv (fn [idx wrap-fn]
                                           (wrap-fn [:morph/by-id local-morph-id] nil idx state))
-                                        (range) (map wrap-as-derived (-> morph :submorphs))))]
+                                        (range) (into [] 
+                                                      (comp
+                                                       (map #(if (= :morph/by-id (-> % first))
+                                                               (get-in @state %)
+                                                               %))
+                                                       (map wrap-as-derived))
+                                                      (-> morph :submorphs))))]
       (store-morph! state morph)
       morph)))
 
@@ -326,12 +366,12 @@
                                       (str idx? "." idx)
                                       idx)]
                             (cond
-                              (seq? x) 
+                              (or (seq? x) (vector? x)) 
                               (into [] (concat morphs (submorphs->flatten x idx)))
                               (fn? x) 
                               (conj morphs (fn [parent owner _ state]
                                              (x parent owner idx state)))
-                              (contains? x :component-id)
+                              (satisfies? IComponent? x)
                               (conj morphs (fn [parent owner _ state]
                                              ((wrap-component x nil) parent owner idx state)))
                               :default morphs)))]
@@ -346,7 +386,7 @@
           (remove nil?))
          (submorphs->flatten submorphs idx))))
 
-(defn store-morph! [state morph]
+(defn store-morph! [state morph redefined?]
   (swap! state assoc-in [:morph/by-id (-> morph :morph-id)] 
          (-> morph
            (update-in 
@@ -359,13 +399,18 @@
                      (when s [:morph/by-id (-> s :morph-id)])) %))))
   morph)
 
-(defn store-component! [state component]
+(defn store-component! [state component redefined?]
   ; rescue local state at any rate!
   (let [id (-> component :component-id)
         {:keys [local-state reconciler]} (get-in @state [:component/by-id id])
         component (assoc component 
                          :local-state (or local-state (:local-state component))
-                         :reconciler (or reconciler (:reconciler component)))]
+                         :reconciler (or (and (not redefined?) reconciler) 
+                                         (:reconciler component)))]
+    ; (when redefined?
+    ;   (prn "redef taken into account..")
+    ;   ; (swap! transmorphic.repl/component-migration-queue dissoc id)
+    ;   )
     (swap! state assoc-in [:component/by-id (-> component :component-id)] 
            (-> component
              (update-in 
@@ -421,6 +466,7 @@
         owner (if stored 
                 (get-in @state (:owner stored))
                 (:owner x))
+        redefined? (contains? @component-migration-queue id)
         removed? (and stored (not= (:parent x) (:parent stored)))
         x (when-not removed?
             (assoc x :submorphs
@@ -429,11 +475,11 @@
                                      :owner owner
                                      :state state)))]
     (when x
-      (if stored
-        (when-not removed?
+      (if (and stored (not redefined?))
+        (when-not removed? 
           (let [x (align-with-stored x stored owner state)]
-            (store-fn state x)))
-        (store-fn state x)))))
+            (store-fn state x redefined?)))
+        (store-fn state x redefined?)))))
 
 (defn consolidate-component [state component]
   (consolidate component store-component! 
@@ -492,16 +538,6 @@
                         :source-location loc))]
       morph)))
 
-(defn get-morph-and-owner [state morph-id]
-  (let [m-ref [:morph/by-id morph-id]
-        m (get-in state m-ref)
-        c-ref (:owner m)
-        c (get-in state c-ref)]
-    {:morph m
-     :morph-ref m-ref
-     :owner c
-     :owner-ref c-ref}))
-
 (defn update-reconciler 
   [state ref-to-changed]
   (let [{:keys [source-location owner txs]} (get-in state ref-to-changed) 
@@ -547,21 +583,7 @@
     (update-reconciler state ref)))
 
 (defn set-prop [state {:keys [ref prop value]}]
-  (set-props state {:ref ref :props->values {prop value}})
-  ; (let [ref (ensure state ref)
-  ;       x (get-in state ref)
-  ;       prototype (-> x :prototype) 
-  ;       state (if prototype
-  ;               (set-prop state {:ref prototype
-  ;                               :prop prop
-  ;                               :value value})
-  ;               (-> state
-  ;                 (update-in ref assoc-in 
-  ;                           [:txs :props prop] value)
-  ;                 (update-in ref assoc-in 
-  ;                           [:props prop] value)))]
-  ;   (update-reconciler state ref))
-  )
+  (set-props state {:ref ref :props->values {prop value}}))
 
 (defn remove-morph [state {:keys [ref]}]
   (let [ref (ensure state ref)
@@ -573,7 +595,12 @@
                                (into []
                                      (remove (fn [x] 
                                                (= x (second ref))) 
-                                             added)))))
+                                             added))))
+                  (update-in [:submorphs] 
+                             (fn [sub-refs]
+                               (into []
+                                     (remove (fn [x] (= x ref)) 
+                                             sub-refs)))))
         to-be-removed (get-in state ref)
         prototype (-> to-be-removed :prototype)]
     (if prototype
@@ -582,7 +609,8 @@
       (-> state
         (update-in (-> to-be-removed :parent) remove)
         (update-in ref merge {:parent nil
-                              :owner nil})
+                              :owner (when (:root? (get-in state ref))
+                                       (:owner (get-in state ref)))})
         (update-reconciler (-> to-be-removed :parent))))))
 
 (defn add-morph [state {:keys [ref new-parent-ref]}]
@@ -590,7 +618,8 @@
         new-parent-ref (ensure state new-parent-ref)
         add #(-> %
                (update-in [:txs :added] conj (second ref))
-               (update-in [:txs :removed] disj (second ref)))
+               (update-in [:txs :removed] disj (second ref))
+               (update-in [:submorphs] conj ref))
         change-parent #(assoc % :parent new-parent-ref)
         parent-prototype (-> state 
                            (get-in new-parent-ref)
@@ -603,17 +632,29 @@
         (update-in ref change-parent)
         (update-reconciler new-parent-ref)))))
 
-; interesting: We could just use the ref to the ident
-; of the morph twice, but this is not the semantics behind
-; the halo copy in lively
-; instead, we need to introduce a new morph entry in our
-; universe
+(defn orphanize [state {:keys [ref]}]
+  (update-in state ref 
+             (fn [morph]
+               (let [morph (dissoc morph :owner :prototype)
+                     props (reduce-kv 
+                            (fn [morph prop value]
+                              (if (fn? value)
+                                (dissoc morph prop)
+                                morph))
+                            morph (:props morph))]
+                 (assoc morph :props props)))))
 
-(defn- copy-morph [state {:keys [morph-id new-morph-id new-id]}]
+(defn- copy-morph [state {:keys [ref new-morph-id new-id]}]
   (assoc-in state [:morph/by-id new-morph-id] 
-            (-> state 
-              (get-in [:morph/by-id morph-id])
-              (assoc :morph-id new-id))))
+            (-> (get-in state ref)
+              (assoc :morph-id new-morph-id)
+              (assoc-in [:props :id] new-id))))
+
+(defn- copy-component [state {:keys [ref new-component-id new-id]}]
+  (assoc-in state [:component/by-id new-component-id] 
+            (-> (get-in state ref)
+              (assoc :component-id new-component-id)
+              (assoc-in [:props :id] new-id))))
 
 (defn- move-morph [state {:keys [ref new-parent-ref]}]
   (let [ref (ensure state ref)
@@ -634,11 +675,23 @@
                                (recur (:owner owner))
                                owner)))))
 
-(defn update-abstraction [state {:keys [ns name new-source]}]
-  ; trigger a figwheel recompile by altering the ns source file
-  ; and also altering core.clj, such that possible new definitions
-  ; are reprocessed and all abstractions are reloaded instrumented
-  )
+(defn update-abstraction! [editor component {:keys [ns name new-source]}]
+  (swap! component-migration-queue
+         assoc (:component-id component) editor)
+  (update-ns-source! ns new-source
+   (fn [_] (prn "Updated: " ns "/" name))))
+
+(defn create-abstraction! [editor morph {:keys [ns name new-source]}]
+  ; if a new abstraction is created, we spawn and attach a dummy
+  ; component as the new owner to the current morph
+  ; the morph is then replaced by a component, that
+  ; is now being evaluated each time the initial
+  ; morph would have been rendered.
+  (swap! morph-migration-queue assoc (:morph-id morph) 
+         {:editor editor
+          :new-component-name (str ns "/" name)})
+  (update-ns-source! ns new-source
+   (fn [_] (prn "Created: " ns "/" name))))
 
 (defn update-component [state {:keys [component-id new-local-state]}]
   (assoc-in state [:component/by-id component-id :local-state] new-local-state))
@@ -675,27 +728,47 @@
 (defn set-prop! [x prop-name prop-value]
   (swap! 
    universe
-   set-prop 
+   (comp refresh-root set-prop) 
    {:ref (get-ref x)
     :prop prop-name 
-    :value prop-value}))
+    :value prop-value})
+  (get-in @universe (get-ref x)))
 
 (defn set-props! [x props->values]
   (swap! 
    universe
-   set-props 
+   (comp refresh-root set-props) 
    {:ref (get-ref x)
-    :props->values props->values}))
+    :props->values props->values})
+  (get-in @universe (get-ref x)))
 
 (defn refresh-scene! []
-  (swap! universe refresh-root))
+  (swap! universe refresh-root)
+  true)
 
+(defn revert-to-state! [state-idx ref-to-preserve]
+  (when-let [entry (get @history-cache state-idx)]
+    (reset! transmorphic.event/step-cbs {})
+    (reset! universe 
+            (assoc-in entry ref-to-preserve 
+                      (get-in @universe ref-to-preserve)))))
+
+; moves morphs as well as components!
+; parents can be either morphs or components.
+; note, that a morph or component, whos parent is
+; a component is always a prototype and will therefore
+; never be rendered directly in the scene.
 (defn move-morph! [x new-parent]
   (swap! 
      universe
      (comp refresh-root move-morph)
      {:ref (get-ref x)
-      :new-parent-ref (get-ref new-parent)}))
+      :new-parent-ref (get-ref new-parent)})
+  (get-in @universe (get-ref x)))
+
+(defn orphanize! [morph]
+  (swap! universe orphanize {:ref (get-ref morph)})
+  (get-in @universe (get-ref morph)))
 
 (defn remove-morph! [x]
   (swap! 
@@ -707,8 +780,7 @@
   [morph-id]
   (let [splitted-morph-id (split morph-id #"\.")
         id-prop (str (-> splitted-morph-id last) "-copy")]
-    {:uuid (join "." (conj (apply vec (butlast splitted-morph-id)) 
-                           id-prop))
+    {:uuid (join "." (concat (butlast splitted-morph-id) (list id-prop)))
      :id id-prop}))
 
 (defn copy-morph! [morph]
@@ -717,27 +789,54 @@
     (swap! 
      universe 
      copy-morph
-     {:ref morph-id
-      :new-uuid uuid
+     {:ref (get-ref morph)
+      :new-morph-id uuid
       :new-id id})
-    [:morph/by-id uuid]))
+    (get-in @universe [:morph/by-id uuid])))
+
+(defn insert-component! 
+  "1. Insert a component into the universe.
+   2. Replace the morph with the component.
+  This is easy, if the morph was added previously.
+  What happens if an innate morph is replaced?
+  Remoing and adding would alter the positon of the morph.
+  But a replace tx does not exist. Can be built by removing all morphs
+  and adding them again in the order they appeard in initially.
+  
+   When the component is unwrapped and re-evaluated, the
+  morph is replaced by the newly rendered root-morph of
+  the insered component. The component, needs to transfer
+  the source location from the replaced morph and also its owner.
+  This is to guarantee that the reconciliation of the owner
+  will now display the call to the component instead
+  of the morph that used to be there previously.
+  3. The new morph hierarchy, that the component yields,
+  will be equivalent but not identical. Therefore, 
+  tools such as a component editor, need to re-focus their
+  target to the yielded root-morph."
+  [morph component]
+  (swap! universe update-in (get-ref morph) assoc :submorphs map ))
+
+(defn toggle-reconciler! [component]
+  (let [component-id (:component-id component)]
+    (swap! universe update-in 
+           [:component/by-id component-id :reconciler :active?] not)))
 
 (def current-namespace 'cljs.user)
 
-(defn set-root! [component]
-  (swap! universe set-root component))
+(defn set-root! [app-state component target]
+  (om/root  
+   (fn [data _]
+     (reify 
+       om/IRender
+       (render [self]
+               (if-let [tree (not-empty (:morph-tree data))]
+                 (om/build render-morph tree {:key :morph-id})
+                 (dom/div #js {:id "dummy-root"})))))
+   app-state {:target target})
+  (swap! app-state set-root component))
 
-(def universe (atom {:morph-tree {}
-                     :abstraction/by-name {} ; ns.name -> abstraction data
-                     :morph/by-id {}
-                     :component/by-id {}}))
-
-(om/root  
- (fn [data _]
-   (reify 
-     om/IRender
-     (render [self]
-             (if-let [tree (not-empty (:morph-tree data))]
-               (om/build render-morph tree {:key :morph-id})
-               (dom/div #js {:id "dummy-root"})))))
- universe {:target (gdom/getElement "app")})
+(defonce universe (atom {:morph-tree {}
+                         :abstraction/by-name {} ; ns.name -> abstraction data
+                         :morph/by-id {}
+                         :component/by-id {}}))

@@ -2,13 +2,14 @@
   (:require
    [clojure.walk :refer [macroexpand-all]]
    [clojure.pprint :refer [pprint]] 
+   [transmorphic.globals]
    [transmorphic.symbolic :refer [analyze-body! instrument-body!]]))
 
 ; morphs are atoms, and are therefore not composed at all
 ; morphs have a single default reconciler policy: (type props (submorph reconciliation))
 (defmacro defmorph 
   [morph-name & stuff]
-  (swap! transmorphic.symbolic/morph-defs assoc morph-name {:ns (-> &env :ns :name)})
+  (swap! transmorphic.globals/morph-defs assoc morph-name {:ns (-> &env :ns :name)})
   (let [has-doc (string? (first stuff))
         doc-string (if has-doc (first stuff))
         [args & body] (if has-doc (rest stuff) stuff)
@@ -16,7 +17,11 @@
         morph-constructor (symbol (str "map->" morph-name "*"))] 
     `(do
        (defrecord ~morph-record 
-         [~'morph-id ~'type ~'props ~'submorphs ~'morph->html ~(symbol "root?")])
+         [~'morph-id ~'type ~'props ~'submorphs ~'morph->html ~(symbol "root?")]
+         transmorphic.core/IMorph?
+         (~'morph? [~'self] true)
+         transmorphic.core/IComponent?
+         (~'component? [~'self] false))
        (defn ~morph-name [~'props & ~'submorphs]
          (~morph-constructor {:type (keyword '~morph-name)
                               :props ~'props 
@@ -35,7 +40,7 @@
 ; whenever projections are re-rendered
 
 (defmacro defcomponent [comp-name & stuff]
-  (swap! transmorphic.symbolic/component-defs 
+  (swap! transmorphic.globals/component-defs 
          assoc comp-name {:ns (-> &env :ns :name)})
   (let [has-doc (string? (first stuff))
         doc-string (if has-doc (first stuff))
@@ -43,7 +48,7 @@
         source-locations (atom (list))
         record-name (symbol (str comp-name "*"))
         component-constructor (symbol (str "map->" record-name))
-        internal-reconciler (assoc (analyze-body! body source-locations) :active? true)
+        internal-reconciler (assoc (analyze-body! body source-locations) :active? false)
         body' (instrument-body! body {:reconciler internal-reconciler
                                       :edit-session {:abstraction-name comp-name
                                                      :reconciler internal-reconciler}
@@ -60,10 +65,15 @@
           ~'abstraction 
           ~'submorphs
           ~'source-location]
+         transmorphic.core/IMorph?
+         (~'morph? [~'self] false)
+         transmorphic.core/IComponent?
+         (~'component? [~'self] true)
          ~@body')
        (defn ~comp-name {:doc ~doc-string} [props# & submorphs#]
          (~component-constructor
            {:props props# 
             :submorphs submorphs#
             :reconciler ~internal-reconciler
-            :abstraction ~comp-name})))))
+            :abstraction {:name '~comp-name
+                          :ns '~(-> &env :ns :name)}})))))

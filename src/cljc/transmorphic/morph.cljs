@@ -3,11 +3,11 @@
   (:require
    [om.next :as om]
    [goog.dom :as gdom]
-   [transmorphic.core :refer [universe eval-suspended-props ensure]]
+   [transmorphic.core :refer [universe eval-suspended-props ensure get-ref
+                              morph? component?]]
    [transmorphic.utils :refer [contains-rect? add-points]]
    [transmorphic.manipulation]
-   [transmorphic.symbolic :refer [instrument-body! analyze-body!
-                                  ellipse?]]))
+   [transmorphic.symbolic :refer [instrument-body! analyze-body! ellipse?]]))
 
 (enable-console-print!)
 
@@ -22,7 +22,27 @@
   (some #(= (second %) (-> morph :morph-id)) 
         (-> parent :submorphs)))
 
-(defn $morph 
+(defn $props 
+  ([morph]
+   (-> @universe 
+     (get-in (get-ref morph))
+     :props))
+  ([morph prop]
+   (let [v (get ($props morph) prop)]
+     (or (:value v) v))))
+
+(defn $submorphs 
+  "Get a vector of all current submorphs of
+   a component or morph."
+  [x]
+  (mapv #(get-in @universe %) (:submorphs x)))
+
+(defn $morph
+  "Get the morph that corresponding to the id.
+   We first assume id, is a global identifier.
+   If this fails, fall back to searching for
+   the next morph that carries a matching
+   :id property."
   [id]
   (when id
     (if-let [ref (ensure @universe [:morph/by-id id])]
@@ -34,6 +54,11 @@
        (get @universe :morph/by-id)))))
 
 (defn $component 
+  "Get the component that corresponding to the id.
+   We first assume id, is a global identifier.
+   If this fails, fall back to searching for
+   the next component that carries a matching
+   :id property."
   [id]
   (when id
     (if-let [ref (ensure @universe [:component/by-id id])]
@@ -44,13 +69,34 @@
             c)) 
         (get @universe :component/by-id)))))
 
-(defn $parent [morph]
-  (when-let [parent-ref (-> morph :parent)]
-    (get-in @universe parent-ref)))
+(defn $local-state 
+  "Retrieve the current local state of
+   the component."
+  [component]
+  (:local-state (get-in @universe (get-ref component))))
 
-(defn $owner [morph]
-  (when-let [owner-ref (-> morph :owner)]
-    (get-in @universe owner-ref)))
+(defmulti $parent 
+  "Get the parent morph of a component or morph or 
+   evaluate to the property of a parent morph."
+  (fn [x & args]
+    (cond 
+      (keyword? x) :property
+      (or (component? x) (morph? x)) :morph
+      :else (throw (str "Can not determine parent of: " x)))))
+
+(defmethod $parent :morph
+  [x]
+  (let [ref (get-ref x)
+             parent-ref (-> @universe (get-in ref) :parent)]
+    (and parent-ref (get-in @universe parent-ref))))
+
+(defn $owner 
+  "Get the component, that passed the props to the
+   given owner or morph"
+  [x]
+  (let [ref (get-ref x)
+             owner-ref (-> @universe (get-in ref) :owner)]
+    (and owner-ref (get-in @universe owner-ref))))
 
 (defn centered-in [reference-morph extent]
   (let [{ref-x :x ref-y :y} (-> reference-morph $morph :extent)
@@ -74,16 +120,17 @@
 
 ; COMPUTED PROPS
 
-(defn parent
-  "Reactive property that is dependent on a parent's property value
-   subject to changes in the given transform."
+(defmethod $parent :property
   ([property]
-   (parent property identity))
+   ($parent property identity))
   ([property transform]
    {:relative? true
     :eval (fn [state morph]
-            (-> (get-in state (:parent morph)) 
-              :props property transform))}))
+            (let [morph (get-in state (:parent morph))
+                  parent-prop (-> morph :props property)]
+              (if (:relative? parent-prop)
+                (transform ((:eval parent-prop) state morph))
+                (transform parent-prop))))}))
 
 (defn vary 
   "Vary a value of a propery over time, given a transformation
@@ -124,9 +171,9 @@
 ; WORLD OPERATIONS
 
 (defn local-offset [morph]
-  (if-let [{:keys [x y]} (and (ellipse? morph)
-                              (-> morph :props :extent))]
-    {:x (/ x 2) :y (/ y 2)}
+  (if (ellipse? morph) 
+    (let [{:keys [x y]} ($props morph :extent)]
+      {:x (/ x 2) :y (/ y 2)})
     {:x 0 :y 0}))
 
 (defn position-in-world
@@ -136,16 +183,13 @@
      (let [owner-morph ($parent morph)]
        (add-points (local-offset owner-morph) 
                    (position-in-world owner-morph)))
-     (or (-> morph :props :position :value)
-         (-> morph :props :position) 
+     (or ($props morph :position)
          {:x 0 :y 0}))
     {:x 0 :y 0}))
 
 (defn global-bounds [morph]
   [(position-in-world morph) 
-   (-> morph 
-     :props
-     :extent)])
+   ($props morph :extent)])
 
 (defn contains-morph? [morph-a morph-b]
   (let [bounds-a (global-bounds morph-a)
@@ -156,21 +200,24 @@
 (defn morph-under-me 
   ([self]
    (morph-under-me self ($parent self) #{(-> self :morph-id)} true))
-  ([self current ignoring ask-owner?]
-   (let [match (some (fn [[_ ref]]
-                       (when (not (contains? ignoring ref))
-                         (morph-under-me self ($morph ref) (conj ignoring ref) false)))
-                     (-> current :submorphs))]
-     (or match
-         (when (contains-morph? current self)
-           current)
-         (and ask-owner?
-              current
-              (morph-under-me
-               self
-               ($parent current) 
-               (conj ignoring (-> current :morph-id))
-               true))))))
+  ([self {:keys [morph-id] :as current} ignoring ask-owner?]
+   (when current
+     (let [match (some (fn [{:keys [morph-id] :as submorph}]
+                         (when (not (contains? ignoring morph-id))
+                           (morph-under-me self submorph 
+                                           (conj ignoring morph-id) 
+                                           false)))
+                       ($submorphs current))]
+       (or match
+           (when (contains-morph? current self)
+             current)
+           (and ask-owner?
+                current
+                (morph-under-me
+                 self
+                 ($parent current) 
+                 (conj ignoring morph-id)
+                 true)))))))
 
 (defn get-description* 
   ([integrator]

@@ -17,24 +17,39 @@
 ; with the code, without saving the chsanges
 
 (defn set-value! 
-  ([ace-instance value]
+  ([{:keys [local-state] :as owner} ace-instance value]
    (let [session (.. ace-instance -session)
-         pos (.. session -selection toJSON)
-         scroll (.. session getScrollTop)]
-     (.setValue ace-instance value)
+         pos (.. ace-instance -selection getCursor)
+         scroll (.. ace-instance -session getScrollTop)
+        ; value (reduce-kv (fn [value [start end] changed]
+        ;                     (str (subs value 0 start) changed (subs value (dec end))))
+        ;                   value (:dirty-nodes local-state))
+         ]
+     (.. session -doc (setValue value))
+     (.. ace-instance -selection (moveToPosition pos))
+     (.. ace-instance -session (setScrollTop scroll))
      (.. ace-instance (resize true)))))
 
-(defn change-handler [ace-state]
-  (let [as @ace-state]
-    (when (and (as :focused?) (not= (.getValue (as :ace-instance)) (as :value)))
-      (swap! ace-state assoc :edited? true))
-    (when (as :ace-instance) (swap! ace-state assoc :value (.getValue (as :ace-instance))))))
+(defn change-handler [{:keys [local-state] :as owner} ace-instance]
+  ; 1. get the current paredit node reference
+  ; 2. store the reference, and when a new set-value! happens,
+  ;    you first replace the whole string, and then swap out the altered nodes
+  ;    in order to preserve user changes
+  ; 3. Over time the changing nodes will start to overlap, so we merge them if this happens
+  (let [dirty-nodes (:dirty-nodes local-state)
+        ast (.. ace-instance -session -$ast)
+        cursor-idx (.. ace-instance getCursorIndex)
+        range (.. js/paredit -navigator (sexpRange ast cursor-idx))
+        [start end] (js->clj range)
+        value (.slice (.. ace-instance getValue) start end)]
+    (rerender! owner #(assoc-in % [:dirty-nodes [start end]] value))))
 
-(defn save-handler [ace-state]
+(defn save-handler [{:keys [local-state] :as owner} ace-state]
   (let [{:keys [on-save ace-instance]} @ace-state
         v (.getValue ace-instance)]
     (swap! ace-state assoc :edited? false :focused? false :value v)
-    (on-save v)))
+    (on-save v)
+    (rerender! owner {:dirty-nodes nil})))
 
 (defn token-at [ace-instance pos]
   (.. ace-instance
@@ -105,6 +120,13 @@
   (let [ace-instance (.edit js/ace (model :id))]
     (.setValue ace-instance (@(model :ace-state) :value))))
 
+(defn update-save-handler! [ace-instance on-save]
+  (.. ace-instance
+      -commands
+      (addCommand  (clj->js {:name "save"
+                             :bindKey {:win "Ctrl-S" :mac "Ctrl-S" :sender "editor|cli"}
+                             :exec #(on-save (.getValue ace-instance))}))))
+
 (defn setup-ace! [self model]
   (let [ace-instance (.edit js/ace (model :id))
         clojure-mode (-> js/ace
@@ -134,38 +156,9 @@
         -commands
         (addCommand  (clj->js {:name "save"
                                :bindKey {:win "Ctrl-S" :mac "Ctrl-S" :sender "editor|cli"}
-                               :exec #(save-handler (model :ace-state))})))
+                               :exec #(save-handler self ace-instance)})))
     (.. ace-instance
-        (on "change" #(change-handler (model :ace-state))))
-    (when (model :value) (set-value! ace-instance (model :value)))
+        (on "change" #(change-handler self ace-instance)))
+    (when (model :value) (set-value! self ace-instance (model :value)))
     (.gotoLine ace-instance (model :line) 1 true)
     (rerender! self {:edited-value (model :value)})))
-
-; the editor component, keeps an external ace instance in sync with
-; the description of a source contents that are passed to it through the
-; props. :value denotes the string that is to be displayed by ace
-; :patches contains a mapping of node-idx to form, and is used by the
-; component, to alter the original (:value) description inside ace
-; to reflect certain adjustments (e.g. reconciliations)
-; NOTE: ace internally keeps a list of "dirty" nodes that have been
-; altered already by the user. patches will be applied as far, es they
-; do not include dirty nodes, whos contents will override the patch
-; value at that point. This allows us to incorporate updated patches
-; that are coming in, while the user is already editing the
-; file.
-
-(defcomponent paredit
-  IDidMount
-  (did-mount [self]
-              (prn "MOUNTED!")
-              {:edited-value nil})
-  IRender
-  (render [{:keys [local-state] :as self} model _]
-          (let [as (or (model :ace-state) (atom {}))
-                model (if (model :ref)
-                        model
-                        (assoc model :ref (atom model)))]
-            (rectangle {})
-            ; (ace {:ace-id (props :id)
-            ;       :setup-ace (fn [_] (setup-ace! self props))})
-            )))

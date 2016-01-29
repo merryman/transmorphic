@@ -3,12 +3,15 @@
                    [transmorphic.core :refer [defcomponent]])
   (:require [transmorphic.symbolic :refer [format-code]]
             [om.next :as om]
+            [goog.dom :as gdom]
             [transmorphic.repl :refer [init-compiler morph-defn morph-eval]]
             [transmorphic.utils :refer [add-points delta]]
-            [transmorphic.morph :refer [$morph behavior parent]]
-            [transmorphic.core :refer [listmorph ellipse rectangle rerender! 
-                                       image io text universe IRender
-                                       set-prop! set-root!]]
+            [transmorphic.morph :refer [$morph behavior]]
+            [transmorphic.core :refer [revert-to-state!
+                                       listmorph ellipse rectangle rerender! 
+                                       image io text universe IRender IInitialize
+                                       set-prop! set-root! refresh-scene! ace
+                                       history-cache checkbox]]
             [transmorphic.manipulation :refer [changes-on-morph]]
             [transmorphic.event :refer [get-current-time meta-focus]]
             
@@ -16,7 +19,7 @@
             [transmorphic.tools.hand :refer [hand-morph]]
             [transmorphic.tools.window :refer [window]]
             [transmorphic.tools.function-editor :refer [component-editor]]
-            [transmorphic.tools.ace :refer [paredit]]))
+            [transmorphic.tools.ace]))
 
 (defcomponent tree 
   IRender
@@ -111,29 +114,95 @@
             :font-size (props :font-size)
             :extent (or (:extent props) {:x 30 :y 30})})))
 
-(defcomponent clock 
+(defcomponent
+  clock
   IRender
-  (render [self {:keys [id extent position time]} _]
-          (let [radius (/ (extent :x) 2)
-                {:keys [x y]} extent
-                ext (if (> x y) {:x x :y x} {:x y :y y})]
-            (ellipse {:id id
-                      :position position
-                      :extent ext
-                      :border-width 4
-                      :border-color "darkgrey"
-                      :fill "-webkit-gradient(radial, 50% 50%, 0, 50% 50%, 250, from(rgb(255, 255, 255)), to(rgb(224, 224, 224)))"}
-                     (map 
-                      (fn [hour]
-                        (hour-label {:id (str hour "h")
-                                     :label hour
-                                     :hour hour
-                                     :radius radius
-                                     :scale (/ radius 15)})) 
-                      (range 1 13)) 
-                     (hour-pointer {:radius radius :hours (time :hours)}) 
-                     (minute-pointer {:radius radius :minutes (time :minutes)}) 
-                     (second-pointer {:radius radius :seconds (time :seconds)})))))
+  (render
+    [{:as self, :keys [local-state]} {:keys [id extent position]} _]
+    (let [{:keys [time]} local-state
+          radius (/ (extent :x) 2)
+          {:keys [x y]} extent
+          ext (if (> x y) {:y x, :x x} {:y y, :x y})]
+      (ellipse
+        {:id id,
+         :position position,
+         :extent extent,
+         :step
+         (fn [_]
+           (rerender! self {:time (get-current-time)})
+           (refresh-scene!)),
+         :border-width 4,
+         :border-color "darkgrey",
+         :fill
+         "-webkit-gradient(radial, 50% 50%, 0, 50% 50%, 250, from(rgb(255, 255, 255)), to(rgb(224, 224, 224)))",
+         :pivot-point {:x 0, :y 0}}
+        (map
+          (fn [hour]
+            (hour-label
+              {:id (str hour "h"),
+               :label hour,
+               :hour hour,
+               :radius radius,
+               :scale (/ radius 15),
+               :font-size 12}))
+          (range 1 13))
+        (hour-pointer {:radius radius, :hours (-> time :hours)})
+        (minute-pointer {:radius radius, :minutes (-> time :minutes)})
+        (second-pointer
+          {:radius radius, :seconds (-> time :seconds)})))))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+(defcomponent history-slider
+  IRender
+  (render
+   [{:keys [local-state] :as self} 
+    {:keys [width on-change position]} submorphs]
+   (rectangle
+    {:id "slider",
+     :position position,
+     :extent (or (:current-ext local-state)
+                 {:x width, :y 19}),
+     :fill "black",
+     :pivot-point {:x 0, :y 0}}
+    (ellipse
+     {:id "knob",
+      :wants-hand-focus? true,
+      :position (or (:current-pos local-state)
+                    {:x width, 
+                     :y -15}),
+      :extent {:x 57, :y 56},
+      :draggable? true
+      :on-drag-start (fn [{:keys [x y]}]
+                       (rerender! self {:current-pos {:x x 
+                                                      :y y}
+                                        :current-ext {:x width, :y 19}}))
+      :on-drag (fn [{:keys [x]}]
+                 (let [{:keys [current-pos
+                               current-ext
+                               value]} local-state
+                       new-pos (add-points current-pos {:x x :y 0})
+                       new-pos (if (or (< (:x current-ext) (new-pos :x))
+                                       (> 0 (new-pos :x)))
+                                 current-pos
+                                 new-pos)
+                       new-value (:x new-pos)]
+                   (rerender! self {:current-pos new-pos})
+                   (when on-change (on-change self new-value)))) 
+      :fill "red",
+      :drop-shadow? false, 
+      :pivot-point {:x 0, :y 0}}))))
 
 (defcomponent interaction-watcher 
   IRender
@@ -171,7 +240,7 @@
                        ; We suggest a very basic variant of layouting by introducing relative props.
                        ; Relative props, are props that are evaluated with respect to the values of
                        ; other props in the immediate neighbourhood of a morph. (usually the owner)
-                       [(paredit {:position {:x 0 :y 0}
+                       [(ace {:position {:x 0 :y 0}
                               :id "model-viewer"
                               :value (format-code (-> ($morph :meta-focus) 
                                                     :model :value))
@@ -233,15 +302,6 @@
              :position {:x 300 :y 100}
              :extent {:x 100 :y 100}
              :fill "orange"})
-          (component-editor
-          {:id "editor"
-            :target-ref "rectangle"
-            :position {:x 700 :y 100}
-            :extent {:x 400 :y 600}})
-          ; (window
-          ;   {
-          ;   :position {:x 700 :y 100}
-          ;   :extent {:x 400 :y 600}})
            (text
             {:id "text"
              :position {:x 700 :y 100}
@@ -250,8 +310,11 @@
              :allow-input false
              :font-size 17
              :extent {:x 50 :y 20}})
+           (checkbox {:on-change (fn [_] 
+                                   (swap! transmorphic.event/stepping? not))
+                      :checked? @transmorphic.event/stepping?
+                      :position {:x 50 :y 50}})
             (clock {:id "Clock" 
-                    :time (get-current-time)
                     :extent {:x 300 :y 300} 
                     :position {:x 300 :y 300}})
            (image {:url "http://www.daniellaondesign.com/uploads/7/3/9/7/7397659/464698_orig.jpg"
@@ -270,4 +333,18 @@
                   :mouse-move {:x 20 :y 20}}
                  (kitchen {:id "kitchen"}))))
 
-(set-root! (my-world {:id "foo"}))
+(defonce application 
+  (set-root! universe 
+    (my-world {:id "foo"})
+    (gdom/getElement "app")))
+
+(def slider-state (atom {}))
+
+; (set-root! slider-state 
+;   (history-slider {:width (count @history-cache) :position {:x 700 :y 200}
+;                   :on-change (fn [self value]
+;                                 (revert-to-state! 
+;                                 value 
+;                                 [:component/by-id 
+;                                   (:comoponent-id self)]))})
+;   (gdom/getElement "history"))

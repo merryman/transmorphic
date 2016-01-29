@@ -54,9 +54,9 @@
 ; BEHAVIOR
 
 (defn handle-grab-or-drag [hand hand-position]
-  (let [{:keys [morph-id start-pos]} @hand-focus
+  (let [{:keys [morph-id start-pos prev-pos]} @hand-focus
         focused-morph ($morph morph-id)
-        {:keys [dragged-morph grabbed-morph prev-pos]} (-> hand :local-state)]
+        {:keys [dragged-morph grabbed-morph]} (-> hand :local-state)]
     ; since the callback funcions are re-bound in every render cycle,
     ; we need to re-fetch them in every handling iteration
     (let [{:keys [draggable? on-drag-start on-drag on-drag-stop position]} 
@@ -68,20 +68,22 @@
                  draggable?
                  (< 10 (eucl-distance hand-position start-pos)))
         (rerender! hand {:dragged-morph morph-id
-                         :prev-pos hand-position})
+                         })
+        (swap! hand-focus assoc :prev-pos hand-position)
         (when on-drag-start (on-drag-start position)))
       ; on drag
       (when (and focused-morph dragged-morph) 
         (let [{dx :x dy :y} (delta prev-pos hand-position)]
-          (when (not= 0 (+ dx dy)) 
-            (rerender! hand {:prev-pos hand-position})
+          (when (not= 0 (+ dx dy))
+            (swap! hand-focus assoc :prev-pos hand-position)
+            ; (rerender! hand {:prev-pos hand-position})
             (when on-drag (on-drag {:x (- dx) :y (- dy)})))))
       ; on drag stop
       (when (and (not focused-morph) dragged-morph) 
         (prn "Stop")
         (when on-drag-stop (on-drag-stop position))
-        (rerender! hand {:dragged-morph nil
-                         :prev-pos nil})))
+        (rerender! hand {:dragged-morph nil})
+        (swap! hand-focus dissoc :prev-pos)))
 
     ; grabbing
     (let [{:keys [grabbable? on-grab on-drop]} 

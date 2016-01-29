@@ -1,10 +1,10 @@
 (ns transmorphic.tools.window
   (:require-macros [transmorphic.core :refer [defcomponent]])
   (:require [transmorphic.core :refer [rectangle image ellipse text rerender! 
-                                       IRender IRefresh IInitialize]]
+                                       IRender IRefresh IInitialize html]]
             [transmorphic.morph :refer [position-in-world
-                                        $morph behavior parent 
-                                        ]]
+                                        $morph behavior $parent]]
+            [om.dom :as dom]
             [transmorphic.utils :refer [add-points delta]]
             [transmorphic.tools.hand]
             [transmorphic.event]))
@@ -62,13 +62,30 @@
  IRender 
   (render [self props _]
   (rectangle
-   {:id "control-wrapper"}
+   {:id "control-wrapper"
+    :extent ($parent :extent #(hash-map :x (:x %) :y 0))}
    (text
-    {:position :centered
+    {:position {:x 100 :y 5}
      :text-string (props :title)
      :text-color "grey"
-     :font-size 15
+     :font-size 12
      :font-family "Chrono Medium Italic"})
+   (html
+    {:visible (:spinner? props)
+     :fill "#f0f0f0"
+     :position ($parent :extent #(hash-map :x (- (:x %) 80) :y -38))
+     :extent {:x 60 :y 20} ; ($parent :extent #(hash-map :x 70 :y (:y %)))
+     :html (let [style {:backgroundColor "#C3C3C3"
+                        :width "15px"
+                        :height "15px"}]
+             (dom/div (clj->js {:className "sk-three-bounce"
+                                :style {:padding "5px"}})
+               (dom/div (clj->js {:className "sk-child sk-bounce1" 
+                                  :style style}))
+               (dom/div (clj->js {:className "sk-child sk-bounce2" 
+                                  :style style}))
+               (dom/div (clj->js {:className "sk-child sk-bounce3" 
+                                  :style style}))))})
    (close-box props)
    (min-box props))))
 
@@ -77,15 +94,9 @@
   (initialize [self]
               {:extent nil
               :position nil})
-  ; IRefresh
-  ; (refresh [self {:keys [extent position]}]
-  ;         (when (or (not= extent (-> self :local-state :extent))
-  ;                   (not= position (-> self :local-state :position)))
-  ;           (rerender! self {:extent extent
-  ;                           :position position})))
   IRender
   (render [{:keys [local-state] :as self} 
-           {:keys [title scrollable?] :as props} 
+           {:keys [title scrollable? on-close spinner?] :as props} 
            submorphs]
           (let [{:keys [extent position]} local-state]
             (rectangle 
@@ -95,7 +106,7 @@
               :fill "linear-gradient(to bottom, #f0f0f0, #e9e9e9)"
               :border-radius 10
               :border-width 1
-              :drop-shadow true
+              :drop-shadow? true
               :draggable? true
               :on-drag (fn [delta]
                          (rerender! 
@@ -109,7 +120,9 @@
                :extent (add-points (or extent (:extent props)) {:x 0 :y -30})}
               submorphs)
              (window-controls {:window self
-                               :title title})
+                               :on-close on-close
+                               :title title
+                               :spinner? spinner?})
              (window-resizer 
               {:position (or extent (:extent props))
                :window self})))))

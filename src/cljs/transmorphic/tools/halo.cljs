@@ -1,15 +1,13 @@
 (ns transmorphic.tools.halo
   (:require-macros [transmorphic.core :refer [defcomponent]])
   (:require [transmorphic.morph :refer [position-in-world $morph 
-                                        parent orphaned? $parent
+                                        orphaned? $parent $props $local-state
                                         morph-under-me $component
                                         abstraction-root $owner
                                         eval-reactive-props Root]]
-            [transmorphic.symbolic]
-            [transmorphic.tools.function-editor :refer [edited-morphs]]
-            [transmorphic.core :refer [rectangle image ellipse text
-                                       rerender! move-morph! copy-morph!
-                                       remove-morph! set-prop! set-props!]]
+            [transmorphic.core :refer [rectangle image ellipse text get-ref
+                                       rerender! move-morph! copy-morph! orphanize!
+                                       remove-morph! set-prop! set-props! refresh-scene!]]
             [transmorphic.tools.function-inspector :refer [inspected-morphs]]
             [transmorphic.tools.hand :refer [grab-morph! drop-morph! local-hand-name]]
             [transmorphic.event :refer [get-cursor-pos meta-focus arrow? shift?]]
@@ -92,22 +90,12 @@
   (fn [e]
     (.stopPropagation e)
     (if (.-altKey e)
-      (let [promoted-meta (-> target $parent :morph-id)]
-        (swap! meta-focus assoc :morph-id 
-            			(or promoted-meta
-                   (:morph-id (morph-under-me 
-                               ($morph "hand"))))))
+      (let [promoted-meta ($parent target)]
+        (reset! meta-focus 
+             			(or promoted-meta
+                    (morph-under-me 
+                     ($morph "hand")))))
       (reset! meta-focus nil))))
-
-; a halo will internally shift its focus
-; to the owner component, in case it discovers
-; that the inspected morph is the root of
-; the components rendered hierarchy.
-; In case the component is currently being edited
-; (i.e. the reconciler is active) Focus will
-; instead move back to the original halo. The assumption
-; is that the user will want to alter the root morph
-; in case the abstraction is being actively modified!
 
 (defcomponent halo
   transmorphic.core/IInitialize
@@ -116,15 +104,19 @@
                :scaling-mode false
                :copy-handle nil})
   transmorphic.core/IRender
-  (render [self props _]
+  (render [{:keys [local-state] :as self} props _]
           (when (-> props :target)
-            (let [target ($morph (props :target))
-                  ; here we need to handle the shifiting of focus to the component
-                  target-ref [:morph/by-id (-> props :target)]
+            (let [copied-morph (-> local-state :updated-prop :copying)
+                  target-ref (if copied-morph
+                               (get-ref copied-morph)
+                               [:morph/by-id (-> props :target)])
+                  target (or copied-morph
+                           ($morph (props :target)))
                   halo-position (position-in-world target)
-                  bbx (compute-bounding-box (-> target :props))
+                  bbx (compute-bounding-box ($props target))
                   component (when (:root? target) ($owner target))
-                  params {:start-updating #(rerender! self {:updated-prop %})
+                  params {:start-editing (:start-editing props)
+                          :start-updating #(rerender! self {:updated-prop %})
                           :multiple-update (fn [props->values]
                                              (when component
                                                (set-props! component props->values))
@@ -138,7 +130,7 @@
                           :target-ref target-ref
                           :bbx bbx
                           :target target}]
-              (rectangle {:id (str "halo-on-" (-> target :props :id))
+              (rectangle {:id (str "halo-on-" ($props target :id))
                           :extent (bbx :ext)
                           :position halo-position 
                           :on-mouse-down (manage-meta params)
@@ -149,7 +141,7 @@
                                          (.stopPropagation e)
                                          (cond 
                                            (shift? e) (rerender! self {:scaling-mode true})
-                                           (arrow? e) (let [old-pos (target :props :position)
+                                           (arrow? e) (let [old-pos ($props target :position)
                                                             new-pos (add-points old-pos
                                                                                 (case (arrow? e)
                                                                                   :up {:x 0 :y 1}
@@ -239,8 +231,7 @@
                 width (* 10 (count (str id)))]
             (when id
               (rectangle
-               {:position (transmorphic.morph/parent 
-                           :extent 
+               {:position ($parent :extent 
                            #(hash-map :x (- (/ (% :x) 2) (/ width 2)) 
                                       :y (+ (% :y) 5)))
                 :visible (not updated-prop)
@@ -325,27 +316,23 @@
                                true)
                     :on-mouse-down (fn [e]
                                      (.stopPropagation e))
-                    :position (transmorphic.morph/parent :extent #(hash-map :x -25 :y (- (* (% :y) .66) 25)))}
+                    :position ($parent :extent #(hash-map :x -25 :y (- (* (% :y) .66) 25)))}
                    (image {:position {:x -5 :y -5} 
                            :url "/media/halos/styleedit.svg" 
                            :extent {:x 15 :y 15}}))))
 
-(declare start-editing!)
-
 (defcomponent edit-button 
   transmorphic.core/IRender
   (render [self props _]
-          (let [{:keys [target updated-prop]} props
+          (let [{:keys [target updated-prop start-editing]} props
                 orphan? (not (:root? target))]
             (ellipse {:fill "rgba(255,255,255,0.4)"
                       :extent {:x 25 :y 25}
                       :visible (not updated-prop)
-                      :position (transmorphic.morph/parent 
-                                 :extent 
+                      :position ($parent :extent 
                                  #(hash-map :x (% :x) :y (- (* (% :y) .33) 25)))
                       :on-mouse-down (fn [e]
-                                       (-> ($component "world") 
-                                         (start-editing! target)))}
+                                       (start-editing target))}
                      (image {:position {:x -5 :y -5} 
                              :url (if orphan?
                                     "/media/halos/scriptedit.svg"
@@ -364,7 +351,7 @@
 
 (defcomponent copy-button 
   transmorphic.core/IRender
-  (render [{:keys [copied-morph-ref] :as self}
+  (render [self
            {:keys [updated-prop start-updating
                         stop-updating target]} _]
           (ellipse {:fill "rgba(255,255,255,0.4)"
@@ -372,17 +359,23 @@
                     :visible (if updated-prop
                                (= :copying updated-prop)
                                true)
+                    :draggable? true
                     :on-mouse-down (fn [e]
                                      (.stopPropagation e))
                     :on-drag-start (fn [start-pos]
-                                     (start-updating :copying)
-                                     (let [copied-morph-ref (copy-morph! target)]
-                                       (grab-morph! copied-morph-ref)
-                                       (rerender! self {:copied-morph-ref copied-morph-ref})))
+                                     (let [copy (-> target
+                                                  copy-morph!
+                                                  orphanize!)]
+                                       (start-updating {:copying copy})
+                                       (grab-morph! copy)
+                                       (rerender! self {:copied-morph copy})))
                     :on-drag-stop (fn [_]
-                                    (stop-updating) 
-                                    (drop-morph! (:copied-morph-ref local-state)))
-                    :position (transmorphic.morph/parent :extent #(hash-map :x -25 :y (- (* (% :y) .33) 25)))}
+                                    (let [{:keys [copied-morph]} 
+                                          (-> self $local-state)]
+                                      (stop-updating)
+                                      (drop-morph! copied-morph)
+                                      (reset! meta-focus copied-morph)))
+                    :position ($parent :extent #(hash-map :x -25 :y (- (* (% :y) .33) 25)))}
                    (image {:position {:x -5 :y -5} 
                            :url "/media/halos/copy.svg" 
                            :extent {:x 15 :y 15}}))))
@@ -399,8 +392,7 @@
                                true)
                     :on-mouse-down (fn [e]
                                      (.stopPropagation e))
-                    :position (transmorphic.morph/parent 
-                               :extent #(hash-map :x (* (% :x) .33) :y -25))
+                    :position ($parent :extent #(hash-map :x (* (% :x) .33) :y -25))
                     :draggable? true
                     :on-drag-start (fn [start-pos]
                                      (start-updating :grabbing)
@@ -424,8 +416,7 @@
                                true)
                     :on-mouse-down (fn [e]
                                      (.stopPropagation e))
-                    :position (transmorphic.morph/parent 
-                               :extent #(hash-map :x (* (% :x) .66) :y -25))
+                    :position ($parent :extent #(hash-map :x (* (% :x) .66) :y -25))
                     :draggable? true
                     :on-drag-start (fn [start-pos]
                                      (start-updating :position)
@@ -484,8 +475,7 @@
                     :visible (if updated-prop
                                (= :extent updated-prop)
                                true)
-                    :position (transmorphic.morph/parent 
-                               :extent 
+                    :position ($parent :extent 
                                #(add-points % {:x 0 :y -25}))
                     :draggable? true
                     :on-drag-start (start-resizing self props)
@@ -502,8 +492,7 @@
           (ellipse {:fill "rgba(255,255,255,0.4)"
                     :extent {:x 25 :y 25}
                     :visible (not updated-prop)
-                    :position (transmorphic.morph/parent 
-                               :extent (fn [ext] {:x (ext :x) :y -25}))
+                    :position ($parent :extent (fn [ext] {:x (ext :x) :y -25}))
                     :on-mouse-down (fn [e]
                                      (.stopPropagation e)
                                      (remove-morph! target)
@@ -523,8 +512,7 @@
                                      (.stopPropagation e)
                                      (swap! inspected-morphs conj target-ref))
                     :visible (not updated-prop)
-                    :position (transmorphic.morph/parent 
-                               :extent (fn [v] {:x (v :x) :y (- (* (v :y) .66) 25) }))}
+                    :position ($parent :extent (fn [v] {:x (v :x) :y (- (* (v :y) .66) 25) }))}
                    (image {:id "infoImage"
                            :position {:x -5 :y -5} 
                            :url "/media/halos/info.svg" 

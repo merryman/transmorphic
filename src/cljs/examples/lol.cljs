@@ -1,0 +1,1 @@
+(ns examples.lol) (def a 42)

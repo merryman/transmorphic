@@ -1,12 +1,10 @@
 (ns transmorphic.repl
   (:require-macros [cljs.core.async.macros :refer [go go-loop]])
-  (:require [transmorphic.core :refer [current-namespace]]
-            [cljs.reader :refer [read-string]]
+  (:require [cljs.reader :refer [read-string]]
             [cljs.pprint :refer [pprint]]
-            [cljs.js]
-            [cljs.core]
             [cljs.tools.reader.reader-types :as trt]
             [cljs.tools.reader :as tr]
+            [cljs.js]
             [cljs.core.async :as async :refer [>! <! put! chan timeout onto-chan close!]]
             [clojure.string :as s]
             [goog.string :refer [StringBuffer]]
@@ -14,6 +12,8 @@
   (:import [goog.net XhrIo]
            [goog.events EventType]
            [goog.string.StringBuffer]))
+
+(def current-namespace (atom nil))
 
 (def *closure-index-mem* (atom {}))
 
@@ -57,6 +57,14 @@
               new-source)
     ch))
 
+(defn get-ns-source [ns-name cb]
+  (go
+   (cb (<! (get-file (str (cljs.js/ns->relpath ns-name) ".cljs"))))))
+
+(defn update-ns-source! [ns-name new-source cb]
+  (go
+   (cb (<! (write-file (str (cljs.js/ns->relpath ns-name) ".cljs") new-source)))))
+
 (def file-cache (atom {}))
 
 (defn extension->lang
@@ -71,7 +79,7 @@
    (let [lang (if (contains? #{'cljs.analyzer} name) ".js" lang)
          path  (str (cljs.js/ns->relpath name) lang)
          path  (case lang
-                 ".cljs" (str "cloxp-cljs-build/out/" path)
+                 ".cljs" path
                  ".cljc" (str "bootstrap-safe/" path)
                  ".js" (str "cloxp-cljs-build/out/" path)
                  ".clj" (cond 

@@ -5,14 +5,27 @@
             #?(:cljs [cljs.tools.reader :refer [read-string]]
                :clj  [clojure.tools.reader :refer [read-string]])
             [cljs.analyzer]
+            [transmorphic.globals]
             [clojure.core.reducers :as r]
             [clojure.string :refer [replace-first split-lines join]]
             [clojure.zip :as z]))
 
-(def widget-defs (atom {}))
-(def part-defs (atom {}))
-(def morph-defs (atom {}))
-(def component-defs (atom {}))
+(defn orphan? [morph]
+  (-> morph :owner nil?))
+
+; we need to traverse the owner chain upwards,
+; and make sure, the component is completely
+; separate from this abstraction...
+(defn foreign? 
+  "A morph is foreign to another one, if
+  he is an orphan or the owner are always
+  different regardless how high we walk up
+  the owner chain"
+  [state a b]
+  (or (orphan? b) ; orphans are always foreign
+      (and (not= (:owner a) (:owner b)) ; we have currently different owners, but we will check the owner chain
+           (when-let [o (and (:owner b) (get-in state (:owner b)))] 
+             (foreign? state a o)))))
 
 (defn fetch-ns-source [ns])
 
@@ -123,20 +136,12 @@
   (z/zipper tree-branch? tree-children tree-make-node node))
 
 (defn morph? [m]
-  (and (seq? m) ; (symbol? (first m)) 
-       (contains? @transmorphic.symbolic/morph-defs (first m))))
-
-(defn part? [p]
-  (and (seq? p) ; (symbol? (first p)) 
-       (contains? @transmorphic.symbolic/part-defs (first p))))
-
-(defn widget? [w]
-  (and (seq? w) ; (symbol? (first w)) 
-       (contains? @transmorphic.symbolic/widget-defs (first w))))
+  (and (seq? m) 
+       (contains? @transmorphic.globals/morph-defs (first m))))
 
 (defn component? [c]
-  (and (seq? c) ; (symbol? (first w)) 
-       (contains? @transmorphic.symbolic/component-defs (first c))))
+  (and (seq? c) 
+       (contains? @transmorphic.globals/component-defs (first c))))
 
 (defn ellipse? [m]
   (= :ellipse (-> m :type)))
@@ -288,10 +293,9 @@
   that an external reconciliation maintains are calls to other
   components, which function as 'abstractional strongholds'."
   [state morph]
-  (let [c (and (:root? morph) 
-                  (get-in state (:owner morph)))] 
+  (let [c (and (:root? morph) (:owner morph) (get-in state (:owner morph)))] 
     (apply list 
-      (or (-> c :abstraction-name)
+      (or (-> c :abstraction :name)
           (symbol (name (-> morph :type)))) 
       (-> (or c morph) :props)
       (into []
@@ -312,12 +316,12 @@
                 (into {}
                       (comp 
                        (map (fn [m]
-                              (if (= (:owner morph) (:owner m))
-                                [(:source-location m)
-                                 (get-description state m reconciler)]
-                                (when-let [comp (and (:owner m) (get-in state (:owner m)))]
+                              (when (not (foreign? state morph m))
+                                (if-let [comp (and (:owner m) (get-in state (:owner m)))]
                                   [(:source-location comp)
-                                   (get-description state comp reconciler)]))))
+                                   (get-description state comp reconciler)]
+                                  [(:source-location m)
+                                 (get-description state m reconciler)]))))
                        (remove nil?))
                       submorphs)
                 own-descriptions 
@@ -337,9 +341,9 @@
                 added-descriptions
                 (into [] 
                       (comp
-                       (map (fn [morph]
-                              (when (not (:owner morph))
-                                (get-external-reconciliation state morph))))
+                       (map (fn [m]
+                              (when (foreign? state morph m)
+                                (get-external-reconciliation state m))))
                        (remove nil?))
                       submorphs)]
             (concat own-descriptions added-descriptions)))]
@@ -348,6 +352,13 @@
       :component (let [c (get-in state (:owner morph))]
                    (reification c (txs :props) (get-sub-descriptions (:submorphs c))))
       nil)))
+
+(defn get-component-def [state root-morph reconciler]
+  (let [{:keys [reification submorph-locations type txs]} (get reconciler 0)
+        root-reconciliation (get-description state root-morph reconciler)]
+    (if (= :expr type)
+      (reification {:m_1 root-reconciliation})
+      root-reconciliation)))
 
 (defn get-internal-reconciliation
   "Given a morph, return its symbolic consolidation
