@@ -7,8 +7,7 @@
             [transmorphic.repl :refer [init-compiler morph-defn morph-eval]]
             [transmorphic.utils :refer [add-points delta]]
             [transmorphic.morph :refer [$morph behavior]]
-            [transmorphic.core :refer [revert-to-state!
-                                       listmorph ellipse rectangle rerender! 
+            [transmorphic.core :refer [listmorph ellipse rectangle rerender! 
                                        image io text universe IRender IInitialize
                                        set-prop! set-root! refresh-scene! ace
                                        history-cache checkbox]]
@@ -100,19 +99,32 @@
 (defn point-from-polar [radius angle]
   {:x (* radius (.cos js/Math angle)) :y (* radius (.sin js/Math angle))})
 
-(defcomponent hour-label 
+(defcomponent
+  hour-label
   IRender
-  (render [self props _]
-          (text
-           {:id (str (props :label) "h")
-            :position (point-from-polar 
-                       (* (props :radius) .8) 
-                       (angle-for-hour (props :hour)))
-            :text-string (props :label)
-            :font-family "Arial"
-            :allow-input false
-            :font-size (props :font-size)
-            :extent (or (:extent props) {:x 30 :y 30})})))
+  (render
+    [self props _]
+    (text
+      {:id (str (props :label) "h"),
+       :position
+       (point-from-polar
+         (* (props :radius) .8)
+         (angle-for-hour (props :hour))),
+       :text-string (props :label),
+       :font-family "Arial",
+       :allow-input false,
+       :extent {:x 58, :y 70},
+       :pivot-point {:x 0, :y 0},
+       :font-size 56}
+      (ellipse
+        {:id "ellipse",
+         :wants-hand-focus? true,
+         :position {:x -22, :y 30},
+         :extent {:x 35, :y 32},
+         :fill "green",
+         :drop-shadow? false, 
+         :pivot-point {:x 0, :y 0}}))))
+
 
 (defcomponent
   clock
@@ -132,7 +144,7 @@
            (rerender! self {:time (get-current-time)})
            (refresh-scene!)),
          :border-width 4,
-         :border-color "darkgrey",
+         :border-color "yellow",
          :fill
          "-webkit-gradient(radial, 50% 50%, 0, 50% 50%, 250, from(rgb(255, 255, 255)), to(rgb(224, 224, 224)))",
          :pivot-point {:x 0, :y 0}}
@@ -143,8 +155,9 @@
                :label hour,
                :hour hour,
                :radius radius,
-               :scale (/ radius 15),
-               :font-size 12}))
+               :extent {:x 43, :y 46},
+               :font-size 36.800000000000004,
+               :pivot-point {:x 0, :y 0}}))
           (range 1 13))
         (hour-pointer {:radius radius, :hours (-> time :hours)})
         (minute-pointer {:radius radius, :minutes (-> time :minutes)})
@@ -152,57 +165,6 @@
           {:radius radius, :seconds (-> time :seconds)})))))
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-(defcomponent history-slider
-  IRender
-  (render
-   [{:keys [local-state] :as self} 
-    {:keys [width on-change position]} submorphs]
-   (rectangle
-    {:id "slider",
-     :position position,
-     :extent (or (:current-ext local-state)
-                 {:x width, :y 19}),
-     :fill "black",
-     :pivot-point {:x 0, :y 0}}
-    (ellipse
-     {:id "knob",
-      :wants-hand-focus? true,
-      :position (or (:current-pos local-state)
-                    {:x width, 
-                     :y -15}),
-      :extent {:x 57, :y 56},
-      :draggable? true
-      :on-drag-start (fn [{:keys [x y]}]
-                       (rerender! self {:current-pos {:x x 
-                                                      :y y}
-                                        :current-ext {:x width, :y 19}}))
-      :on-drag (fn [{:keys [x]}]
-                 (let [{:keys [current-pos
-                               current-ext
-                               value]} local-state
-                       new-pos (add-points current-pos {:x x :y 0})
-                       new-pos (if (or (< (:x current-ext) (new-pos :x))
-                                       (> 0 (new-pos :x)))
-                                 current-pos
-                                 new-pos)
-                       new-value (:x new-pos)]
-                   (rerender! self {:current-pos new-pos})
-                   (when on-change (on-change self new-value)))) 
-      :fill "red",
-      :drop-shadow? false, 
-      :pivot-point {:x 0, :y 0}}))))
 
 (defcomponent interaction-watcher 
   IRender
@@ -329,7 +291,7 @@
   IRender
   (render [_ _ _]
           (world {:id "world"
-                  :extent {:x 1600 :y 900}
+                  :extent {:x 2000 :y 2000}
                   :mouse-move {:x 20 :y 20}}
                  (kitchen {:id "kitchen"}))))
 
@@ -348,3 +310,4 @@
 ;                                 [:component/by-id 
 ;                                   (:comoponent-id self)]))})
 ;   (gdom/getElement "history"))
+
