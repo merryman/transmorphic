@@ -7,9 +7,11 @@
                                         eval-reactive-props Root]]
             [transmorphic.core :refer [rectangle image ellipse text get-ref
                                        rerender! move-morph! copy-morph! orphanize!
-                                       remove-morph! set-prop! set-props! refresh-scene!]]
+                                       remove-morph! set-prop! set-props! refresh-scene!
+                                       detach-cache!]]
             [transmorphic.tools.function-inspector :refer [inspected-morphs]]
-            [transmorphic.tools.hand :refer [grab-morph! drop-morph! local-hand-name]]
+            [transmorphic.tools.hand :refer [grab-morph! drop-morph! local-hand-name
+                                             grab-component! drop-component!]]
             [transmorphic.event :refer [get-cursor-pos meta-focus arrow? shift?]]
             [transmorphic.utils :refer [add-points delta]]))
 
@@ -67,10 +69,13 @@
         min-y (apply min ys)
         max-y (apply max ys)]
     {:pos {:x min-x :y min-y}
-     :ext {:x (+ (.abs js/Math min-x) 
-                 (.abs js/Math max-x))  
-           :y (+ (.abs js/Math min-y) 
-                 (.abs js/Math max-y))}}))
+     :ext (let [x (+ (.abs js/Math min-x) 
+                     (.abs js/Math max-x))
+                y (+ (.abs js/Math min-y) 
+                     (.abs js/Math max-y))
+                x (if (> 50 x) 50 x)
+                y (if (> 50 y) 50 y)]
+            {:x x :y y})}))
 
 (defn transformed-props [model]
   (let [morph ($morph (model :target-id))
@@ -94,7 +99,7 @@
         (reset! meta-focus 
              			(or promoted-meta
                     (morph-under-me 
-                     ($morph "hand")))))
+                     ($morph (local-hand-name))))))
       (reset! meta-focus nil))))
 
 (defcomponent halo
@@ -107,27 +112,29 @@
   (render [{:keys [local-state] :as self} props _]
           (when (-> props :target)
             (let [copied-morph (-> local-state :updated-prop :copying)
-                  target-ref (if copied-morph
-                               (get-ref copied-morph)
-                               [:morph/by-id (-> props :target)])
+                  morph (or copied-morph ($morph (props :target)))
+                  component (when (:root? morph) ($owner morph))
                   target (or copied-morph
-                           ($morph (props :target)))
-                  halo-position (position-in-world target)
-                  bbx (compute-bounding-box ($props target))
-                  component (when (:root? target) ($owner target))
+                             (when (-> component :reconciler :active?)
+                               morph)
+                             component
+                             morph)
+                  halo-position (position-in-world morph)
+                  bbx (compute-bounding-box (merge ($props morph) 
+                                                   (when component
+                                                     ($props component))))
                   params {:start-editing (:start-editing props)
-                          :start-updating #(rerender! self {:updated-prop %})
+                          :start-updating #(do
+                                             (detach-cache! target)
+                                             (rerender! self {:updated-prop %}))
                           :multiple-update (fn [props->values]
-                                             (when component
-                                               (set-props! component props->values))
                                              (set-props! target props->values)) 
                           :update (fn [prop value]
-                                    (when component
-                                      (set-prop! component prop value))
                                     (set-prop! target prop value))
                           :stop-updating #(rerender! self {:updated-prop nil})
                           :updated-prop (-> self :local-state :updated-prop)
-                          :target-ref target-ref
+                          :component component
+                          :morph morph
                           :bbx bbx
                           :target target}]
               (rectangle {:id (str "halo-on-" ($props target :id))
@@ -153,7 +160,9 @@
                          (rectangle {:id "visible-bounding-box"
                                      :extent (bbx :ext)
                                      :position (bbx :pos)
-                                     :border-color "red" 
+                                     :border-color (if (:root? morph)
+                                                     "blue"
+                                                     "red") 
                                      :border-width 1}
                                     (map
                                      (fn [button]
@@ -166,7 +175,8 @@
                                       drag-button
                                       grab-button
                                       close-button
-                                      inspect-button])
+                                      inspect-button
+                                      ])
                                     (viewer params))
                          (if (-> self :local-state :scaling-mode)
                            (scaling-button params) 
@@ -266,7 +276,7 @@
           new-pos (add-points rotation-point delta)
           curr-polar (norm (delta new-pos rotation-point))
           angle (- init-rotation 
-                   (* (.sign js/Math (cross init-polar curr-polar)) 
+                   (* (.sign js/Math (cross init-polar curr-polar))
                       (.acos js/Math (dot init-polar curr-polar))))]
       (update :rotation angle)
       (rerender! self {:rotation-point new-pos}))))
@@ -311,6 +321,7 @@
   (render [self {:keys [updated-prop]} _]
           (ellipse {:fill "rgba(255,255,255,0.4)"
                     :extent {:x 25 :y 25}
+                    :opacity .2
                     :visible (if updated-prop
                                (= updated-prop :styling)
                                true)
@@ -324,30 +335,20 @@
 (defcomponent edit-button 
   transmorphic.core/IRender
   (render [self props _]
-          (let [{:keys [target updated-prop start-editing]} props
-                orphan? (not (:root? target))]
+          (let [{:keys [morph updated-prop start-editing]} props
+                orphan? (not (:root? morph))]
             (ellipse {:fill "rgba(255,255,255,0.4)"
                       :extent {:x 25 :y 25}
                       :visible (not updated-prop)
                       :position ($parent :extent 
                                  #(hash-map :x (% :x) :y (- (* (% :y) .33) 25)))
                       :on-mouse-down (fn [e]
-                                       (start-editing target))}
+                                       (start-editing morph))}
                      (image {:position {:x -5 :y -5} 
                              :url (if orphan?
                                     "/media/halos/scriptedit.svg"
                                     "/media/halos/scriptedit_script.svg") 
                              :extent {:x 15 :y 15}})))))
-
-(defn drag-halo! 
-  [model curr]
-  (let [new-cursor curr
-        {:keys [prev-cursor], :or {prev-cursor curr}} model
-        {dx :x dy :y} (delta prev-cursor new-cursor)
-        new-halo-pos (add-points (model :position) {:x (- dx) :y (- dy)})]
-    (rerender! model {:prev-cursor new-cursor
-                      :position new-halo-pos})
-    {:x (- dx) :y (- dy)}))
 
 (defcomponent copy-button 
   transmorphic.core/IRender
@@ -382,7 +383,7 @@
 
 (defcomponent grab-button 
   transmorphic.core/IRender
-  (render [self {:keys [updated-prop target
+  (render [self {:keys [updated-prop target component
                         start-updating stop-updating] :as props} _]
           (ellipse {:fill "rgba(255,255,255,0.4)"
                     :id "grab-button"
@@ -396,10 +397,14 @@
                     :draggable? true
                     :on-drag-start (fn [start-pos]
                                      (start-updating :grabbing)
-                                     (grab-morph! target))
+                                     (if component
+                                       (grab-component! component)
+                                       (grab-morph! target)))
                     :on-drag-stop (fn [_] 
                                     (stop-updating)
-                                    (drop-morph! target))}
+                                    (if component
+                                      (drop-component! component)
+                                      (drop-morph! target)))}
                    (image {:position {:x -5 :y -5} 
                            :url "/media/halos/grabbinghand.svg" 
                            :extent {:x 15 :y 15}}))))
@@ -443,7 +448,7 @@
       (rerender! self {:extent extent
                        :pivot-point (or pivot-point {:x 0 :y 0})}))))
 
-(defn resize [self {:keys [target multiple-update]}]
+(defn resize [self {:keys [target multiple-update morph]}]
   (fn [delta]
     (let [{:keys [extent pivot-point]} (-> self :local-state)
           {old-x :x :old-y :y} extent
@@ -454,7 +459,7 @@
           new-props (merge 
                      {:extent new-ext
                       :pivot-point new-pivot}
-                     (when (= :text (:type target))
+                     (when (= :text (:type morph))
                         {:font-size (* .8 (new-ext :y))}))]
       (multiple-update new-props)
       (rerender! self {:pivot-point new-pivot
@@ -505,12 +510,13 @@
 
 (defcomponent inspect-button 
   transmorphic.core/IRender
-  (render [self {:keys [updated-prop target-ref]} _]
+  (render [self {:keys [updated-prop target]} _]
           (ellipse {:fill "rgba(255,255,255,0.4)"
                     :extent {:x 25 :y 25}
+                    :opacity 0.2
                     :on-mouse-down (fn [e]
                                      (.stopPropagation e)
-                                     (swap! inspected-morphs conj target-ref))
+                                     (swap! inspected-morphs conj (get-ref target)))
                     :visible (not updated-prop)
                     :position ($parent :extent (fn [v] {:x (v :x) :y (- (* (v :y) .66) 25) }))}
                    (image {:id "infoImage"

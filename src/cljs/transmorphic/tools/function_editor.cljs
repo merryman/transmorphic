@@ -2,7 +2,7 @@
   (:require-macros
    [cljs.core.async.macros :refer [go go-loop]] 
    [transmorphic.core :refer [defcomponent]])
-  (:require [transmorphic.morph :refer [$morph orphaned? $parent $component]]
+  (:require [transmorphic.morph :refer [$morph orphaned? $parent $component $source]]
             [transmorphic.core :refer [rectangle text rerender! IRender
                                        universe checkbox ace refresh-scene!
                                        toggle-reconciler! update-abstraction! create-abstraction!]]
@@ -56,13 +56,9 @@
 ; if non root-morph inspected, the component
 ; needs to be constructed ad hoc
 (defn refresh-editor! [{:keys [local-state] :as self} 
-                       ace-editor root-morph component]
-  (if-not (-> local-state :ns-source)
-    (get-ns-source (or (-> component :abstraction :ns)
-                       'examples.playground) 
-                   (fn [s] 
-                     (rerender! self {:ns-source s})))
-    (when (-> local-state :locked? not)
+                       ace-editor root-morph ns-source component]
+  (when (and ns-source
+             (-> local-state :locked? not))
       (cond
         (-> component :reconciler :active?)
         (set-value! 
@@ -82,20 +78,19 @@
           ace-editor 
           (get-defn-in-source
            component
-           (:ns-source local-state))))
-      (refresh-scene!))))
+           ns-source)))
+      (refresh-scene!)))
 
 (defn save-handler 
   [{:keys [local-state] :as self} 
-   component root-morph
+   component root-morph ns-source
    {:keys [description
            ns name
            create?]}]
   (if create?
     (let [name (-> description read-string second)
-          ns-source (-> local-state :ns-source)
           {:keys [start end]} (get-slice-for-defn
-                               (-> local-state :ns-source)
+                               ns-source
                                ns)
           new-ns-source (str (subs ns-source start end) "\n\n"
                              `(declare ~name) "\n"
@@ -108,9 +103,8 @@
         :new-source new-ns-source}))
     (let [{:keys [start end]} 
           (get-slice-for-defn
-           (-> local-state :ns-source)
+           ns-source
            name)
-          ns-source (-> local-state :ns-source)
           new-ns-source (str (subs ns-source 0 start)
                              description
                              (subs ns-source end))]
@@ -125,7 +119,8 @@
   IRender
   (render [{:keys [local-state] :as self} 
            {:keys [position extent target-ref id on-close] :as props} _]
-          (let [root-morph ($morph target-ref)
+          (let [root-morph (or (:current-target local-state)
+                               ($morph target-ref))
                 component (and (:root? root-morph)
                                (:owner root-morph)
                                (get-in @universe (:owner root-morph))) 
@@ -133,7 +128,9 @@
                                      {:ns 'examples.playground
                                       :create? true
                                       :name (symbol (str (-> root-morph :props :id) "-component"))})
-                title (str (-> abstraction-info :ns) "/" (-> abstraction-info :name))]
+                title (str (-> abstraction-info :ns) "/" (-> abstraction-info :name))
+                ns-source ($source (or (-> component :abstraction :ns)
+                                       'examples.playground))]
             (window
              {:position position
               :extent extent
@@ -150,9 +147,7 @@
                    :step (fn [_]
                            (refresh-editor! 
                             self (.edit js/ace (props :id)) 
-                            root-morph component))
-                   :on-mouse-down (fn [e]
-                                    (rerender! self #(update-in % [:locked?] not)))
+                            root-morph ns-source component))
                    :will-receive-props (fn [_]
                                          (let [editor (.edit js/ace (props :id))] 
                                            (set-change-handler!
@@ -160,11 +155,24 @@
                                              #(rerender! self {:edited-value (.getValue editor)}))
                                            (set-save-handler! 
                                              editor
-                                             #(save-handler self component root-morph
+                                             #(save-handler self component 
+                                                            root-morph
+                                                            ns-source
                                                             (assoc abstraction-info 
                                                                    :description %)))))  
                    :did-mount (fn [_] 
                                 (setup-ace! self props))})
+             [(text {:position ($parent :extent #(hash-map :x 210 :y (- (:y %) 20)))
+                       :text-string "Locked? "
+                       :font-family "Chrono Medium Italic"
+                       :text-color "black"
+                       :font-size 12})
+                (checkbox {:on-change (fn [_] 
+                                        (rerender! self #(update-in % [:locked?] not)))
+                           :checked? (-> local-state :locked?)
+                           :position 
+                           ($parent :extent 
+                            #(hash-map :x 290 :y (- (:y %) 20)))})]
              (when component
                [(text {:position ($parent :extent #(hash-map :x 10 :y (- (:y %) 20)))
                        :text-string "Reconcile Changes "
@@ -175,6 +183,5 @@
                                         (toggle-reconciler! component))
                            :checked? (-> component :reconciler :active?)
                            :position 
-                           ($parent 
-                            :extent 
+                           ($parent :extent 
                             #(hash-map :x 180 :y (- (:y %) 20)))})])))))

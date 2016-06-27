@@ -6,12 +6,13 @@
    [transmorphic.core :refer [universe eval-suspended-props ensure get-ref
                               morph? component?]]
    [transmorphic.utils :refer [contains-rect? add-points]]
+   [transmorphic.repl :refer [get-ns-source]]
    [transmorphic.manipulation]
    [transmorphic.symbolic :refer [instrument-body! analyze-body! ellipse?]]))
 
 (enable-console-print!)
 
-(declare orphaned? Root Orphan Part Coll RootView MorphView CollView)
+(declare orphaned? Root Orphan Part Coll RootView MorphView CollView $owner)
 
 ; MORPH REFERENCING
 
@@ -22,6 +23,19 @@
   (some #(= (second %) (-> morph :morph-id)) 
         (-> parent :submorphs)))
 
+(defn $source
+  [ns-name]
+  (if-let [ns-source (get-in @universe [:namespace/by-name ns-name])]
+    (when-not (= :fetching ns-source)
+      ns-source)
+    (do
+      (swap! universe assoc-in [:namespace/by-name ns-name] :fetching)
+      (get-ns-source ns-name #(swap! universe assoc-in [:namespace/by-name ns-name] %))
+      false)))
+
+; in case we ask for the props of a component,
+; we will continue lookup in the root-morph, inc
+; case the component does not hold the position explicitly
 (defn $props 
   ([morph]
    (-> @universe 
@@ -29,13 +43,16 @@
      :props))
   ([morph prop]
    (let [v (get ($props morph) prop)]
-     (or (:value v) v))))
+     (or (:value v) v (when (:root? morph)
+                        ($props ($owner morph) prop))))))
 
 (defn $submorphs 
   "Get a vector of all current submorphs of
    a component or morph."
-  [x]
-  (mapv #(get-in @universe %) (:submorphs x)))
+  ([x]
+   ($submorphs @universe x))
+  ([state x]
+   (mapv #(get-in state %) (:submorphs x))))
 
 (defn $morph
   "Get the morph that corresponding to the id.
@@ -43,15 +60,24 @@
    If this fails, fall back to searching for
    the next morph that carries a matching
    :id property."
-  [id]
-  (when id
-    (if-let [ref (ensure @universe [:morph/by-id id])]
-      (get-in @universe ref)
-      (some
-       (fn [[_ morph]]
-         (when (= id (-> morph :props :id))
-           morph)) 
-       (get @universe :morph/by-id)))))
+  ([id]
+   ($morph id false))
+  ([id query?]
+   (if query?
+     (into {}
+           (filter 
+            (fn [[morph-id morph]]
+              (when (re-matches (re-pattern (str ".*" id)) morph-id)
+                [morph-id morph])))
+           (get @universe :morph/by-id))
+     (when id
+       (if-let [ref (ensure @universe [:morph/by-id id])]
+         (get-in @universe ref)
+         (some
+          (fn [[_ morph]]
+            (when (= id (-> morph :props :id))
+              morph)) 
+          (get @universe :morph/by-id)))))))
 
 (defn $component 
   "Get the component that corresponding to the id.
@@ -59,15 +85,17 @@
    If this fails, fall back to searching for
    the next component that carries a matching
    :id property."
-  [id]
-  (when id
-    (if-let [ref (ensure @universe [:component/by-id id])]
-      (get-in @universe ref)
-      (some
+  ([id]
+   ($component id false))
+  ([id query?]
+   (when id
+     (if-let [ref (ensure @universe [:component/by-id id])]
+       (get-in @universe ref)
+       (some
         (fn [[_ {:keys [props] :as c}]]
           (when (= id (props :id))
             c)) 
-        (get @universe :component/by-id)))))
+        (get @universe :component/by-id))))))
 
 (defn $local-state 
   "Retrieve the current local state of

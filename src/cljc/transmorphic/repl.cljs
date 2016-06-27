@@ -38,8 +38,7 @@
                     (go (>! ch res)
                         (close! ch)))
                   (go (>! ch :error)
-                        (close! ch)
-                  ))))
+                        (close! ch)))))
     ch))
 
 (defn write-file [url, new-source]
@@ -51,8 +50,7 @@
                     (go (>! ch res)
                         (close! ch)))
                   (go (>! ch :error)
-                        (close! ch)
-                  )))
+                        (close! ch))))
               "POST"
               new-source)
     ch))

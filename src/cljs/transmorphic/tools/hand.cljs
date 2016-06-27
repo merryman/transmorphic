@@ -10,6 +10,7 @@
                                eval-reactive-prop local-offset]]
    [transmorphic.core :refer [rectangle text universe
                               rerender! set-prop! move-morph!
+                              move-component!
                               IRender IInitialize IRefresh]]
    [transmorphic.utils :refer [add-points eucl-distance delta]]))
 
@@ -26,6 +27,32 @@
 
 ; CUSTOM MUTATION API
 
+(defn grab-component!
+  [component]
+  (let [hand ($morph (local-hand-name))
+        relative-pos (delta (position-in-world component)
+                            (position-in-world hand))]
+    (move-component! component hand)
+    ; by default, the root-morph is provided with the props
+    ; passed to the component. In case the component definition
+    ; specifies this, properties of the root may of course be overridden. 
+    ; this approach prevents tedious default passing of external
+    ; properties, which is especially common in a morphic environment
+    (set-prop! component :position relative-pos)
+    (set-prop! component :drop-shadow? true)))
+
+(defn drop-component!
+  [component]
+  (let [new-parent (morph-under-me ($morph (local-hand-name)))
+        relative-pos (add-points 
+                      (delta (position-in-world component)
+                             (position-in-world new-parent))
+                      (delta {:x 0 :y 0} 
+                             (local-offset new-parent)))]
+    (move-component! component new-parent)
+    (set-prop! component :drop-shadow? false)
+    (set-prop! component :position relative-pos)))
+
 (defn grab-morph! 
   "Moves the morph (if not moved already) referenced 
    by morph-id to the hand of the
@@ -41,7 +68,7 @@
   "Moves the morph currently residing in the hand morph
    onto the one directly beneath it."
   [morph]
-  (let [new-parent (morph-under-me morph)
+  (let [new-parent (morph-under-me ($morph (local-hand-name)))
         relative-pos (add-points 
                       (delta (position-in-world morph)
                              (position-in-world new-parent))
@@ -67,8 +94,7 @@
       (when (and (and focused-morph (not dragged-morph))
                  draggable?
                  (< 10 (eucl-distance hand-position start-pos)))
-        (rerender! hand {:dragged-morph morph-id
-                         })
+        (rerender! hand {:dragged-morph morph-id})
         (swap! hand-focus assoc :prev-pos hand-position)
         (when on-drag-start (on-drag-start position)))
       ; on drag

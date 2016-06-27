@@ -68,7 +68,7 @@
     {:position {:x 100 :y 5}
      :text-string (props :title)
      :text-color "grey"
-     :font-size 12
+     :font-size 11
      :font-family "Chrono Medium Italic"})
    (html
     {:visible (:spinner? props)

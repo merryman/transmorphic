@@ -61,7 +61,7 @@
 (defn clean-handlers! []
   (reset! step-cbs {}))
 
-(defn extract-event-handlers [ident props]
+(defn extract-event-handlers [ident props refresh]
   (when-let [stepper (:step props)]
     (swap! step-cbs assoc ident stepper))
   {
@@ -83,13 +83,15 @@
      (when (= ident (:morph-id @hand-focus))
        (swap! hand-focus assoc :curr-pos (get-cursor-pos e)))
      (when-let [cb! (props :on-mouse-move)] 
-       (cb! e)))
+       (cb! e)
+       (refresh)))
    :onMouseUp
    (fn [e]
      (.preventDefault e)
      (drop-hand-focus!)
      (when-let [cb! (props :on-mouse-up)]
-       (cb! e)))
+       (cb! e)
+       (refresh)))
    :onMouseDown
    (fn [e]
      (.preventDefault e)
@@ -102,7 +104,8 @@
        (reset! hand-focus {:morph-id ident
                            :start-pos (get-cursor-pos e)}))
      (when-let [cb! (props :on-mouse-down)] 
-       (cb! e)))})
+       (cb! e)
+       (refresh)))})
 
 
 ; STEPPING

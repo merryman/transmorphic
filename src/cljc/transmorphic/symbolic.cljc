@@ -34,6 +34,8 @@
                            (with-pprint-dispatch code-dispatch 
                              (pprint form))))))
 
+(def ctx-param-name `render-ctx#)
+
 ; SOURCE MAPPING
 
 ; this is a cljs/clj independent type dispatch, and is needed since 
@@ -140,6 +142,9 @@
   (and (seq? c) 
        (contains? @transmorphic.globals/component-defs (first c))))
 
+(defn render-def? [form]
+  (and (seq? form) (= 'render (first form))))
+
 (defn ellipse? [m]
   (= :ellipse (-> m :type)))
 
@@ -199,14 +204,38 @@
                  id-stack] :as env}]
   (let [loc (first @id-stack)]
     (swap! id-stack rest)
-    (if (morph? call)
-      `(transmorphic.core/wrap-morph ~call ~loc)
-      `(transmorphic.core/wrap-component ~call ~loc))))
+    (if (= 1 loc)
+      (if (morph? call)
+        `(assoc (transmorphic.core/wrap-morph ~call ~ctx-param-name) :source-location ~loc)
+        `(assoc (transmorphic.core/wrap-component ~call ~ctx-param-name) :source-location ~loc))
+      `(assoc ~call :source-location ~loc))))
 
-(defn instrument-body! [defmorph-body env]
-  (each-morph-call-out defmorph-body 
-                       (fn [call _]
-                         (instrument-call call env))))
+(defn inject-ctx-parameter
+  "Find that place where render definition resides, and
+   add an additional render-context variable"
+  [form]
+  (let [root (tree-zipper form)]
+    (loop [i 0
+           z root]
+      (if (render-def? (clojure.zip/node z))
+        (let [z (clojure.zip/edit z 
+                                  (fn [render-def]
+                                    (apply list 
+                                      (first render-def) 
+                                      (conj (second render-def) ctx-param-name) 
+                                      (drop 2 render-def))))]
+          
+          (clojure.zip/root z))
+        (if (clojure.zip/end? z)
+          (clojure.zip/root z)
+          (recur (inc i) (clojure.zip/next z)))))))
+
+(defn instrument-body! [component-body env]
+  (-> component-body
+    (inject-ctx-parameter)
+    (each-morph-call-out 
+     (fn [call _]
+       (instrument-call call env)))))
 
 ; RECONCILER
 
@@ -290,7 +319,9 @@
   that an external reconciliation maintains are calls to other
   components, which function as 'abstractional strongholds'."
   [state morph]
-  (let [c (and (:root? morph) (:owner morph) (get-in state (:owner morph)))] 
+  (let [c (or 
+           (and (:root? morph) (:owner morph) (get-in state (:owner morph)))
+           (and (:abstraction morph) morph))] 
     (apply list 
       (or (-> c :abstraction :name)
           (symbol (name (-> morph :type)))) 
@@ -333,7 +364,7 @@
                                                   loc->submorph-descriptions)]
                                    (reification args))))) 
                      submorph-locations)
-                added-submorphs (map #(get-in state [:morph/by-id %]) (:added txs))
+                added-submorphs (map #(get-in state %) (:added txs))
                 added-descriptions
                 (into [] 
                       (comp
