@@ -206,8 +206,8 @@
     (swap! id-stack rest)
     (if (= 1 loc)
       (if (morph? call)
-        `(assoc (transmorphic.core/wrap-morph ~call ~ctx-param-name) :source-location ~loc)
-        `(assoc (transmorphic.core/wrap-component ~call ~ctx-param-name) :source-location ~loc))
+        `(transmorphic.core/wrap-morph ~call (assoc ~ctx-param-name :source-location ~loc))
+        `(transmorphic.core/wrap-component ~call (assoc ~ctx-param-name :source-location ~loc)))
       `(assoc ~call :source-location ~loc))))
 
 (defn inject-ctx-parameter
