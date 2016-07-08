@@ -88,7 +88,8 @@
                              (rerender! self {}))
             :on-mouse-up (fn [e]
                            (handle-grab-or-drag self (get-cursor-pos e))
-                           (drop-hand-focus!))
+                           (drop-hand-focus!)
+                           (rerender! self {}))
             :on-mouse-move (fn [e]
                              (handle-grab-or-drag self (get-cursor-pos e))
                              (rerender! self {:hand-position (get-cursor-pos e)}))}           

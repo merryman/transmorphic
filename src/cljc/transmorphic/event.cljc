@@ -96,7 +96,8 @@
    (fn [e]
      (.preventDefault e)
      (when (and (meta-click? e) 
-                (-> @meta-focus :morph-id not))
+                (-> @meta-focus :morph-id not)
+                (-> @meta-focus :component-id not))
        (swap! meta-focus assoc :morph-id ident))
      (when (and (= 0 (.-button e)) 
                 (-> @hand-focus :morph-id not)

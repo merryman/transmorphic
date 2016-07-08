@@ -342,13 +342,12 @@
           (let [submorphs (map #(get-in state %) submorph-refs)
                 loc->submorph-descriptions 
                 (into {}
-                      (comp 
+                      (comp
                        (map #(loop [x' %]
                                (if (and (:owner x') (foreign? state morph x'))
                                  (recur (get-in state (:owner x')))
                                  [(:source-location x')
-                                  (get-description state x' reconciler)])))
-                       (remove nil?))
+                                  (get-description state x' reconciler)]))))
                       submorphs)
                 own-descriptions 
                 (map (fn [loc]
@@ -371,9 +370,9 @@
                        (map (fn [m]
                               (when (foreign? state morph m)
                                 (get-external-reconciliation state m))))
-                       (remove nil?))
+                       )
                       added-submorphs)]
-            (concat own-descriptions added-descriptions)))]
+            (remove nil? (concat own-descriptions added-descriptions))))]
     (case type
       :morph (reification morph (txs :props) (get-sub-descriptions (:submorphs morph)))
       :component (let [c (get-in state (:owner morph))]

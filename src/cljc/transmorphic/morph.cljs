@@ -235,7 +235,7 @@
                            (morph-under-me self submorph 
                                            (conj ignoring morph-id) 
                                            false)))
-                       ($submorphs current))]
+                       (reverse ($submorphs current)))]
        (or match
            (when (contains-morph? current self)
              current)
