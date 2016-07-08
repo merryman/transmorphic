@@ -95,11 +95,15 @@
   (fn [e]
     (.stopPropagation e)
     (if (.-altKey e)
-      (let [promoted-meta ($parent target)]
+      (let [promoted-meta (if (:root? target)
+                              ($owner target)
+                              ($parent target))]
         (reset! meta-focus 
              			(or promoted-meta
                     (morph-under-me 
-                     ($morph (local-hand-name))))))
+                    ($morph (local-hand-name)))
+                  )
+                 ))
       (reset! meta-focus nil))))
 
 (defcomponent halo
@@ -110,78 +114,81 @@
                :copy-handle nil})
   transmorphic.core/IRender
   (render [{:keys [local-state] :as self} props _]
-          (when (-> props :target)
-            (let [copied-morph (-> local-state :updated-prop :copying)
-                  morph (or copied-morph ($morph (props :target)))
-                  component (when (:root? morph) ($owner morph))
-                  target (or copied-morph
-                             (when (-> component :reconciler :active?)
-                               morph)
-                             component
-                             morph)
-                  halo-position (position-in-world morph)
-                  bbx (compute-bounding-box (merge ($props morph) 
-                                                   (when component
-                                                     ($props component))))
-                  params {:start-editing (:start-editing props)
-                          :start-updating #(do
-                                             (detach-cache! target)
-                                             (rerender! self {:updated-prop %}))
-                          :multiple-update (fn [props->values]
-                                             (set-props! target props->values)) 
-                          :update (fn [prop value]
-                                    (set-prop! target prop value))
-                          :stop-updating #(rerender! self {:updated-prop nil})
-                          :updated-prop (-> self :local-state :updated-prop)
-                          :component component
-                          :morph morph
-                          :bbx bbx
-                          :target target}]
-              (rectangle {:id (str "halo-on-" ($props target :id))
-                          :extent (bbx :ext)
-                          :position halo-position 
-                          :on-mouse-down (manage-meta params)
-                          :on-key-up (fn [e]
-                                         (when 
-                                           (shift? e) (rerender! self {:scaling-mode false})))
-                          :on-key-down (fn [e]
-                                         (.stopPropagation e)
-                                         (cond 
-                                           (shift? e) (rerender! self {:scaling-mode true})
-                                           (arrow? e) (let [old-pos ($props target :position)
-                                                            new-pos (add-points old-pos
-                                                                                (case (arrow? e)
-                                                                                  :up {:x 0 :y 1}
-                                                                                  :left {:x -1 :y 0}
-                                                                                  :right {:x 1 :y 0}
-                                                                                  :down {:x 0 :y -1}))]
-                                                        (set-prop! target :position new-pos))))}
-                         
-                         (rectangle {:id "visible-bounding-box"
-                                     :extent (bbx :ext)
-                                     :position (bbx :pos)
-                                     :border-color (if (:root? morph)
-                                                     "blue"
-                                                     "red") 
-                                     :border-width 1}
-                                    (map
-                                     (fn [button]
-                                       (button params))
-                                     [name-tag
-                                      copy-button 
-                                      styling-button
-                                      edit-button
-                                      resize-button
-                                      drag-button
-                                      grab-button
-                                      close-button
-                                      inspect-button
-                                      ])
-                                    (viewer params))
-                         (if (-> self :local-state :scaling-mode)
-                           (scaling-button params) 
-                           (rotate-button params))
-                         (pivot-cursor params))))))
+           (when (-> props :target)
+             (let [copied-morph (-> local-state :updated-prop :copying)
+                   morph (or copied-morph ($morph (props :target)) ($morph (second (local-state :target))))
+                   component (when (:root? morph) ($owner morph))
+                   target (or copied-morph
+                              (when (-> component :reconciler :active?)
+                                morph)
+                              component
+                              morph)
+                   halo-position (if component
+                                     (position-in-world component)
+                                     (position-in-world morph))
+                   bbx (compute-bounding-box (merge ($props morph) 
+                                                    (when component
+                                                      ($props component))))
+                   params {:start-editing (:start-editing props)
+                           :start-updating #(do
+                                              (detach-cache! target)
+                                              (rerender! self {:updated-prop %}))
+                           :multiple-update (fn [props->values]
+                                              (set-props! target props->values)) 
+                           :update (fn [prop value]
+                                     (set-prop! target prop value))
+                           :stop-updating #(rerender! self {:updated-prop nil})
+                           :updated-prop (-> self :local-state :updated-prop)
+                           :update-target #(rerender! self {:target %})
+                           :component component
+                           :morph morph
+                           :bbx bbx
+                           :target target}]
+               (rectangle {:id (str "halo-on-" ($props target :id))
+                           :extent (bbx :ext)
+                           :position halo-position 
+                           :on-mouse-down (manage-meta params)
+                           :on-key-up (fn [e]
+                                        (when 
+                                          (shift? e) (rerender! self {:scaling-mode false})))
+                           :on-key-down (fn [e]
+                                          (.stopPropagation e)
+                                          (cond 
+                                            (shift? e) (rerender! self {:scaling-mode true})
+                                            (arrow? e) (let [old-pos ($props target :position)
+                                                             new-pos (add-points old-pos
+                                                                                 (case (arrow? e)
+                                                                                   :up {:x 0 :y 1}
+                                                                                   :left {:x -1 :y 0}
+                                                                                   :right {:x 1 :y 0}
+                                                                                   :down {:x 0 :y -1}))]
+                                                         (set-prop! target :position new-pos))))}
+                          
+                          (rectangle {:id "visible-bounding-box"
+                                      :extent (bbx :ext)
+                                      :position (bbx :pos)
+                                      :border-color (if (:root? morph)
+                                                      "blue"
+                                                      "red") 
+                                      :border-width 1}
+                                     (map
+                                      (fn [button]
+                                        (button params))
+                                      [name-tag
+                                       copy-button 
+                                       styling-button
+                                       edit-button
+                                       resize-button
+                                       drag-button
+                                       grab-button
+                                       close-button
+                                       inspect-button
+                                       ])
+                                     (viewer params))
+                          (if (-> self :local-state :scaling-mode)
+                            (scaling-button params) 
+                            (rotate-button params))
+                          (pivot-cursor params))))))
 
 (defcomponent pivot-cursor 
   transmorphic.core/IRender
@@ -237,7 +244,8 @@
   transmorphic.core/IRender
   (render [self props _]
           (let [{:keys [target updated-prop]} props
-                id (-> target :props :id)
+                id (or (-> target :props :id) (when (:component-id target)
+                                                    (-> target :abstraction :name)))
                 width (* 10 (count (str id)))]
             (when id
               (rectangle
@@ -383,7 +391,7 @@
 
 (defcomponent grab-button 
   transmorphic.core/IRender
-  (render [self {:keys [updated-prop target component
+  (render [self {:keys [updated-prop target component update-target
                         start-updating stop-updating] :as props} _]
           (ellipse {:fill "rgba(255,255,255,0.4)"
                     :id "grab-button"
@@ -398,12 +406,14 @@
                     :on-drag-start (fn [start-pos]
                                      (start-updating :grabbing)
                                      (if component
-                                       (grab-component! component)
+                                       (let [new-root (grab-component! component)]
+                                           (update-target new-root))
                                        (grab-morph! target)))
                     :on-drag-stop (fn [_] 
                                     (stop-updating)
                                     (if component
-                                      (drop-component! component)
+                                      (let [new-root (drop-component! component)]
+                                           (update-target new-root))
                                       (drop-morph! target)))}
                    (image {:position {:x -5 :y -5} 
                            :url "/media/halos/grabbinghand.svg" 

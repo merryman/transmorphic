@@ -331,24 +331,6 @@
              (fn [submorphs]
                (mapv #(get-morph-tree state %) submorphs))))
 
-(defn apply-patch [state {:keys [path value skip]}]
-  ; this applies a patch consisting out of a path
-  ; pointing into the position inside the global morph scene graph
-  ; together with the new value behind that part of the world
-  ; this can be either a different morph hierarchy, or just a primitve value
-  ; changing a property etc...
-  (if skip
-    (let [component (get state :root-component)
-         ; {:keys [abstraction source-location parent owner props]} component
-          state-tracker (atom (merge state {:skip skip}))
-          morph-tree (render-component* component {:state state-tracker})
-          new-state (-> @state-tracker
-                      (assoc :morph-tree morph-tree)
-                      (dissoc :skip))]
-     ; (when cache-history? (swap! history-cache conj new-state))
-      new-state)
-    (assoc-in state path value)))
-
 (declare wrap-morph wrap-component)
 
 (defn- refresh-root
@@ -391,7 +373,7 @@
                               (component? x)
                               (conj morphs (wrap-component x (assoc render-ctx :idx idx)))
                               :default morphs)))]
-     (into [] (reduce reduce-morphs [] (zipmap (range) submorphs))))))
+     (into [] (reduce reduce-morphs [] (zipmap (range) (remove nil? submorphs)))))))
 
 (defn unwrap-submorphs
   ([submorphs render-context]
@@ -525,9 +507,14 @@
         (let [morph (consolidate morph store-morph!
                        :morph-id :morph/by-id state)]
               (when (and (:root? morph) (:owner morph) (-> morph :prototype not))
-                (swap! state assoc-in
-                       [:component/by-id (-> morph :owner :component-id) :cached]
-                       morph))
+                (let [stored-owner (get-in @state (get-ref @state (-> morph :owner)))]
+                    (swap! state assoc-in
+                         [:component/by-id (-> stored-owner :component-id) :cached]
+                         morph)
+                       (when (and (-> stored-owner :root?) (-> stored-owner :owner))
+                          (swap! state assoc-in
+                            (conj (-> stored-owner :owner) :cached)
+                             morph))))
                      morph))
 
 (defn render-component* [self {:keys [state idx]}]
@@ -549,13 +536,15 @@
            owner (if (:prototype component)
                          (:owner component)
                          owner)
-           component-id (->> [(second parent)
+           component-id (->> [(when owner (str "[" (:component-id owner) "]"))
+                              (second parent)
                               (or (-> component :props :id) idx)]
                           (remove nil?)
                           (join "."))
            component (consolidate-component
                       state
                       (assoc component
+                             :root? (and owner root?)
                              :source-location (if root? source-location (:source-location component))
                              :component-id component-id
                              :parent parent
@@ -691,8 +680,10 @@
                               :owner (when (:root? (get-in state ref))
                                        (:owner (get-in state ref)))})
         (update-reconciler (-> to-be-removed :parent))))))
-
-(defn add-component [state {:keys [ref new-parent-ref]}]) ; obsolete?
+      
+(defn remove-component [state, {:keys [ref]}]
+  (let [state (remove-morph state {:ref ref})]
+       state))
 
 (defn add-morph [state {:keys [ref new-parent-ref]}]
   (let [ref (ensure state ref)
@@ -713,6 +704,9 @@
         (update-in new-parent-ref add)
         (update-in ref change-parent)
         (update-reconciler new-parent-ref)))))
+      
+(defn add-component [state args]
+  (add-morph state args)) ; obsolete?
 
 (defn orphanize [state {:keys [ref]}]
   (update-in state ref
@@ -742,6 +736,8 @@
 ; moving a component is therefore a different operation
 ; since txs need to be moved explicitly over to
 ; the new hierarchy of morphs.
+; also remove the hold morph hierarchy from the state
+
 (defn migrate-changes [state {:keys [from to]}]
   (let [from-morph (get-in state from)
         descendants (into
@@ -753,7 +749,9 @@
                                   "") submorph-ref]))
                      (-> state (get-in from) :submorphs))
         to-morph (get-in state to)
-        state (update-in state to assoc :txs (-> from-morph :txs))]
+        state (-> state 
+                  (update-in to assoc :txs (-> from-morph :txs))
+                  (dissoc from))]
     (reduce
      (fn [state [id-postfix descendant]]
        ; strip of the parent part of the morph-id
@@ -770,38 +768,40 @@
                                  :to co-descendant})))
      state descendants)))
 
+(defn get-owners-morphs [state owner]
+  (into
+   #{}
+   (comp
+    (filter
+     (fn [morph-entry]
+       (when (= owner (-> morph-entry val :owner))
+         morph-entry)))
+    (map key))
+   (state :morph/by-id)))
+
 (defn move-component [state {:keys [ref new-parent-ref]}]
   (let [ref (ensure state ref)
         new-parent-ref (ensure state new-parent-ref)
-        root-morphs (into
-                     #{}
-                     (comp
-                      (filter
-                       (fn [morph-entry]
-                         (when (= ref (-> morph-entry val :owner))
-                           morph-entry)))
-                      (map key))
-                     (state :morph/by-id))
+        owned-morphs (get-owners-morphs state ref)
         state (-> state
-                (remove-morph {:ref ref})
-                (add-morph {:new-parent-ref new-parent-ref
-                            :ref ref})
+                (remove-component {:ref ref})
+                (add-component {:new-parent-ref new-parent-ref
+                                :ref ref})
                 (refresh-root))
-        new-ref [:component/by-id (str (second new-parent-ref) "."
-                                       (-> state (get-in ref) :props :id))]
+        root-morph (first owned-morphs)
         new-root-morph (->> (state :morph/by-id)
                          (some
                           (fn [[morph-id morph]]
-                            (when (and (= new-ref (-> morph :owner))
-                                       (-> root-morphs
+                            (when (and (= ref (-> morph :owner))
+                                       (-> owned-morphs
                                          (contains? morph-id) not))
                               morph-id))))
         state (if new-root-morph
-                (migrate-changes state {:from [:morph/by-id (first root-morphs)]
+                (migrate-changes state {:from [:morph/by-id root-morph]
                                         :to [:morph/by-id new-root-morph]})
                 state)
         state (reduce (fn [state, id]
-                          (update-in state [:morph/by-id] dissoc id)) state root-morphs)]
+                          (update-in state [:morph/by-id] dissoc id)) state owned-morphs)]
     state))
 
 (defn- move-morph [state {:keys [ref new-parent-ref]}]
@@ -909,7 +909,9 @@
 
 (defn update-component! [component-id new-state]
   (swap! universe
-         update-component
+         (comp 
+               #(mark-path-dirty % (get-in % [:component/by-id component-id]))
+               update-component)
          {:component-id component-id
           :new-local-state new-state}))
 
@@ -982,9 +984,32 @@
 (defn get-cached [state component]
   (:cached component))
 
-(defn get-root-morph [state component]
-  (when (:root-morph component)
-    (get-in state (:root-morph component))))
+(defn get-root-morph 
+  "Find the root morph of a certain component."
+  [state component]
+    (some (fn [[_ morph]]
+                (when 
+                  (and 
+                     (:root? morph)
+                     (= (get-ref component) (:owner morph)))
+                   (get-ref state morph))) 
+                   (:morph/by-id state)))
+
+(defn get-root-component 
+  "Some component may render as their root
+   an actual component."
+  [state component]
+    (some (fn [[_ c]]
+                (when 
+                  (and 
+                     (:root? c)
+                     (= (get-ref component) (:owner c)))
+                   (get-ref state c))) 
+                   (:component/by-id state)))
+                 
+(defn get-root [state c]
+  (or (get-root-morph state c) 
+      (get-root-component state c)))
 
 (defn add-component! [x component]
   (let [state @universe
@@ -1000,7 +1025,7 @@
     (reset! universe state)
     ; find the new root-morph for that component
     ; this is actually not finding it.... fix...
-    (get-root-morph state new-component)))
+    (get-root state new-component)))
 
 (defn move-component! [component new-parent]
   (swap! universe 

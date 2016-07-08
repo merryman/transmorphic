@@ -10,7 +10,7 @@
                                eval-reactive-prop local-offset]]
    [transmorphic.core :refer [rectangle text universe
                               rerender! set-prop! move-morph!
-                              move-component!
+                              move-component! get-root universe
                               IRender IInitialize IRefresh]]
    [transmorphic.utils :refer [add-points eucl-distance delta]]))
 
@@ -32,14 +32,11 @@
   (let [hand ($morph (local-hand-name))
         relative-pos (delta (position-in-world component)
                             (position-in-world hand))]
-    (move-component! component hand)
-    ; by default, the root-morph is provided with the props
-    ; passed to the component. In case the component definition
-    ; specifies this, properties of the root may of course be overridden. 
-    ; this approach prevents tedious default passing of external
-    ; properties, which is especially common in a morphic environment
     (set-prop! component :position relative-pos)
-    (set-prop! component :drop-shadow? true)))
+    (set-prop! component :drop-shadow? true)
+    (move-component! component hand)
+    ; relocated component will render a new root
+    (get-root @universe component)))
 
 (defn drop-component!
   [component]
@@ -49,9 +46,11 @@
                              (position-in-world new-parent))
                       (delta {:x 0 :y 0} 
                              (local-offset new-parent)))]
-    (move-component! component new-parent)
     (set-prop! component :drop-shadow? false)
-    (set-prop! component :position relative-pos)))
+    (set-prop! component :position relative-pos)
+    (move-component! component new-parent)
+    ; relocated, so...
+    (get-root @universe component)))
 
 (defn grab-morph! 
   "Moves the morph (if not moved already) referenced 
