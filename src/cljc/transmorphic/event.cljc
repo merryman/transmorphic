@@ -38,7 +38,10 @@
                         :global? true})
   (when @stepping?
     (doseq [[ident cb] @step-cbs]
-         (cb ident))))
+         (try
+           (cb ident)
+           (catch js/Error e
+             e)))))
 
 #?(:cljs (js/setInterval
         update-time
@@ -69,20 +72,20 @@
   ; (fn [e]
   ;   (prn "key down!")
   ;   (.preventDefault e)
-  ;   (when-let [cb! (props :on-key-down)] 
+  ;   (when-let [cb! (props :on-key-down)]
   ;     (cb! e)))
   ; :onKeyUp
   ; (fn [e]
   ;   (prn "key up!")
   ;   (.preventDefault e)
-  ;   (when-let [cb! (props :on-key-up)] 
-  ;     (cb! e))) 
-   :onMouseMove 
+  ;   (when-let [cb! (props :on-key-up)]
+  ;     (cb! e)))
+   :onMouseMove
    (fn [e]
      (.preventDefault e)
      (when (= ident (:morph-id @hand-focus))
        (swap! hand-focus assoc :curr-pos (get-cursor-pos e)))
-     (when-let [cb! (props :on-mouse-move)] 
+     (when-let [cb! (props :on-mouse-move)]
        (cb! e)
        (refresh)))
    :onMouseUp
@@ -95,18 +98,15 @@
    :onMouseDown
    (fn [e]
      (.preventDefault e)
-     (when (and (meta-click? e) 
+     (when (and (meta-click? e)
                 (-> @meta-focus :morph-id not)
                 (-> @meta-focus :component-id not))
        (swap! meta-focus assoc :morph-id ident))
-     (when (and (= 0 (.-button e)) 
+     (when (and (= 0 (.-button e))
                 (-> @hand-focus :morph-id not)
                 (wants-hand-focus? props))
        (reset! hand-focus {:morph-id ident
                            :start-pos (get-cursor-pos e)}))
-     (when-let [cb! (props :on-mouse-down)] 
+     (when-let [cb! (props :on-mouse-down)]
        (cb! e)
        (refresh)))})
-
-
-; STEPPING
