@@ -66,7 +66,7 @@
           ace-editor 
           (get-description-for 
            component root-morph))
-        (nil? component)
+        (not component)
         (set-value! 
           self 
           ace-editor
@@ -78,8 +78,7 @@
           ace-editor 
           (get-defn-in-source
            component
-           ns-source)))
-      (refresh-scene!)))
+           ns-source)))))
 
 (defn save-handler 
   [{:keys [local-state] :as self} 
@@ -119,8 +118,7 @@
   IRender
   (render [{:keys [local-state] :as self} 
            {:keys [position extent target-ref id on-close] :as props} _]
-          (let [root-morph (or (:current-target local-state)
-                               ($morph target-ref))
+          (let [root-morph ($morph target-ref)
                 component (and (:root? root-morph)
                                (:owner root-morph)
                                (get-in @universe (:owner root-morph))) 
@@ -130,7 +128,16 @@
                                       :name (symbol (str (-> root-morph :props :id) "-component"))})
                 title (str (-> abstraction-info :ns) "/" (-> abstraction-info :name))
                 ns-source ($source (or (-> component :abstraction :ns)
-                                       'examples.playground))]
+                                       'examples.playground))
+                editor (and (.getElementById js/document (props :id)) (.edit js/ace (props :id)))]
+            (when editor
+              (set-save-handler! 
+                editor
+                #(save-handler self component 
+                               root-morph
+                               ns-source
+                               (assoc abstraction-info 
+                                      :description %)))) 
             (window
              {:position position
               :extent extent
@@ -145,21 +152,10 @@
                      "orange"
                      "transparent")
                    :step (fn [_]
-                           (refresh-editor! 
-                            self (.edit js/ace (props :id)) 
-                            root-morph ns-source component))
-                   :will-receive-props (fn [_]
-                                         (let [editor (.edit js/ace (props :id))] 
-                                           (set-change-handler!
-                                             editor
-                                             #(rerender! self {:edited-value (.getValue editor)}))
-                                           (set-save-handler! 
-                                             editor
-                                             #(save-handler self component 
-                                                            root-morph
-                                                            ns-source
-                                                            (assoc abstraction-info 
-                                                                   :description %)))))  
+                           (when editor
+                             (refresh-editor! 
+                              self editor 
+                              root-morph ns-source component))) 
                    :did-mount (fn [_] 
                                 (setup-ace! self props))})
              [(text {:position ($parent :extent #(hash-map :x 210 :y (- (:y %) 20)))

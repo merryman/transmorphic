@@ -24,11 +24,12 @@
         ; value (reduce-kv (fn [value [start end] changed]
         ;                     (str (subs value 0 start) changed (subs value (dec end))))
         ;                   value (:dirty-nodes local-state))
-         ]
-     (.. session -doc (setValue value))
-     (.. ace-instance -selection (moveToPosition pos))
-     (.. ace-instance -session (setScrollTop scroll))
-     (.. ace-instance (resize true)))))
+         storedValue (.. session -doc (getValue value))]
+     (when (not= storedValue value)
+       (.. session -doc (setValue value 0))
+       (.. ace-instance -selection (moveToPosition pos))
+       (.. ace-instance -session (setScrollTop scroll))
+       (.. ace-instance (resize true))))))
 
 (defn save-handler [{:keys [local-state] :as owner} ace-state]
   (let [{:keys [on-save ace-instance]} @ace-state
