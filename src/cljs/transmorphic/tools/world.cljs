@@ -27,14 +27,8 @@
     [{:keys [local-state] :as self}
      {:keys [width on-change position title value]}
      submorphs]
-    (window
-     {:title title
-      :extent {:x (+ 20 width) :y 60}
-      :on-mouse-down (fn [e]
-                        (.stopPropagation e))}
      (rectangle
-      {:id "slider",
-       :position {:x 10 :y 10},
+      {:id "slider"
        :extent {:x width :y 3},
        :fill "grey",
        :pivot-point {:x 0, :y 0}}
@@ -69,7 +63,7 @@
          :id "knob",
          :extent {:x 20, :y 20},
          :wants-hand-focus? true,
-         :position {:x (* width (or value 1)), :y -10}})))))
+         :position {:x (* width (or value 1)), :y -10}}))))
 
 (defcomponent world
   transmorphic.core/IRender
@@ -92,7 +86,7 @@
                            (rerender! self {}))
             :on-mouse-move (fn [e]
                              (handle-grab-or-drag self (get-cursor-pos e))
-                             (rerender! self {:hand-position (get-cursor-pos e)}))}           
+                             (rerender! self {:hand-position (get-cursor-pos e)}))}
            (rectangle {:id "world-morph"
                       :extent (props :extent)
                       :position {:x 0 :y 0}
@@ -110,16 +104,6 @@
                :target-ref ec
                :position {:x 700 :y 100}
                :extent {:x 400 :y 600}}))
-          ; (when (:morph-id @meta-focus)
-          ;   (slider {:position {:x 700 :y 700}
-          ;             :width 200
-          ;             :value (/ (inc (or (get @reverted-entities (:morph-id @meta-focus))
-          ;                               (history-count)))
-          ;                       (inc (history-count)))
-          ;             :title (str "History of " (-> @meta-focus :morph-id $morph $props :id))
-          ;             :on-change (fn [self value]
-          ;                         (let[i (.. js/Math (floor (* value (history-count))))]
-          ;                           (revert-history! (-> @meta-focus :morph-id $morph) i)))}))
            (hand-morph {:id (str (get-local-hkey) "-hand")
                         :position (-> self :local-state :hand-position)})
            (halo {:id "halo"
@@ -129,5 +113,5 @@
                                     #(update-in %
                                                 [:edited-morphs]
                                                 conj (:morph-id target))))
-                  :target (:morph-id @meta-focus)
+                  :target (or (:component-id @meta-focus) (:morph-id @meta-focus))
                   :idle true}))))
