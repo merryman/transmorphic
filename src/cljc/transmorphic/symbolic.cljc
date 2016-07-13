@@ -1,6 +1,6 @@
 (ns transmorphic.symbolic
   #?(:cljs (:require-macros [cljs.pprint :refer [with-pprint-dispatch]]))
-  (:require #?(:cljs [cljs.pprint :refer [pprint code-dispatch 
+  (:require #?(:cljs [cljs.pprint :refer [pprint code-dispatch
                                           *print-right-margin*]])
             #?(:cljs [cljs.tools.reader :refer [read-string]]
                :clj  [clojure.tools.reader :refer [read-string]])
@@ -16,7 +16,7 @@
 ; we need to traverse the owner chain upwards,
 ; and make sure, the component is completely
 ; separate from this abstraction...
-(defn foreign? 
+(defn foreign?
   "A morph is foreign to another one, if
   he is an orphan or the owner are always
   different regardless how high we walk up
@@ -31,14 +31,14 @@
 #?(:cljs (defn format-code [form]
            "TODO: Find a faster way to do this."
            (with-out-str (binding [*print-right-margin* 72]
-                           (with-pprint-dispatch code-dispatch 
+                           (with-pprint-dispatch code-dispatch
                              (pprint form))))))
 
 (def ctx-param-name `render-ctx#)
 
 ; SOURCE MAPPING
 
-; this is a cljs/clj independent type dispatch, and is needed since 
+; this is a cljs/clj independent type dispatch, and is needed since
 ; bootstrapped cljs can NOT YET work with the fully fledged clojure library
 ; at all
 
@@ -89,7 +89,7 @@
             *gensyms* (atom {})]
     (quote-fn* form)))
 
-(defmacro template [form] 
+(defmacro template [form]
   (quote-fn identity form))
 
 (defn template-fn [form]
@@ -135,11 +135,11 @@
   (z/zipper tree-branch? tree-children tree-make-node node))
 
 (defn morph? [m]
-  (and (seq? m) 
+  (and (seq? m)
        (contains? @transmorphic.globals/morph-defs (first m))))
 
 (defn component? [c]
-  (and (seq? c) 
+  (and (seq? c)
        (contains? @transmorphic.globals/component-defs (first c))))
 
 (defn render-def? [form]
@@ -193,7 +193,7 @@
 
 ; overriding only works for morphs currently. make it work for parts aswell! this is crucial.
 
-(defn instrument-call 
+(defn instrument-call
   "Alter all occuring calls to morphs, parts or widgets
    such thath they are aware, they are being used in the
    context of the current abstraction.
@@ -218,13 +218,13 @@
     (loop [i 0
            z root]
       (if (render-def? (clojure.zip/node z))
-        (let [z (clojure.zip/edit z 
+        (let [z (clojure.zip/edit z
                                   (fn [render-def]
-                                    (apply list 
-                                      (first render-def) 
-                                      (conj (second render-def) ctx-param-name) 
+                                    (apply list
+                                      (first render-def)
+                                      (conj (second render-def) ctx-param-name)
                                       (drop 2 render-def))))]
-          
+
           (clojure.zip/root z))
         (if (clojure.zip/end? z)
           (clojure.zip/root z)
@@ -233,7 +233,7 @@
 (defn instrument-body! [component-body env]
   (-> component-body
     (inject-ctx-parameter)
-    (each-morph-call-out 
+    (each-morph-call-out
      (fn [call _]
        (instrument-call call env)))))
 
@@ -243,18 +243,18 @@
   (binding [cljs.analyzer/*cljs-warnings*
             (zipmap (keys cljs.analyzer/*cljs-warnings*) (repeat false))]
     (let [props (-> (cljs.analyzer/empty-env)
-                  (cljs.analyzer/analyze props) 
+                  (cljs.analyzer/analyze props)
                   :children)]
-      (map #(-> % first :form) 
+      (map #(-> % first :form)
            (filter (fn [v]
-                     (or 
+                     (or
                       (= :var (-> v second :op))
                       (some #(= :var (:op %))
-                            (-> v second :children)))) 
+                            (-> v second :children))))
                    (partition 2 props))))))
 
 (defn analyze-expr! [expr change-integrator morph-idx id-stack]
-  (if 
+  (if
     (or (component? expr) (morph? expr))
     (let [current-morph-idx (swap! morph-idx inc)
           _ (swap! id-stack conj current-morph-idx)
@@ -269,21 +269,21 @@
                               :removed #{}}
                         :submorph-locations [~@submorphs]
                         :reification (fn [~'self ~'props-txs ~'submorphs]
-                                       (apply list '~name 
-                                         (merge '~props ~'props-txs) 
+                                       (apply list '~name
+                                         (merge '~props ~'props-txs)
                                          ~'submorphs))}]
       (swap! change-integrator
              assoc current-morph-idx
              integration)
       current-morph-idx)
-    
+
     (let [current-morph-idx (swap! morph-idx inc)
           submorphs (atom [])
-          reification-params (atom []) 
-          templatized-expr (each-morph-call-in 
-                            expr 
+          reification-params (atom [])
+          templatized-expr (each-morph-call-in
+                            expr
                             (fn [morph-def _]
-                              (let [m-idx (analyze-expr! morph-def 
+                              (let [m-idx (analyze-expr! morph-def
                                                          change-integrator
                                                          morph-idx
                                                          id-stack)]
@@ -310,7 +310,7 @@
     (analyze-expr! defmorph-body change-integrator morph-idx id-stack)
     @change-integrator))
 
-(defn get-external-reconciliation 
+(defn get-external-reconciliation
   "Returns the symbolic description of a morph
   hierarchy outside of a symbolic functional scope.
   This is essentially a composition of morph calls,
@@ -319,12 +319,12 @@
   that an external reconciliation maintains are calls to other
   components, which function as 'abstractional strongholds'."
   [state morph]
-  (let [c (or 
+  (let [c (or
            (and (:root? morph) (:owner morph) (get-in state (:owner morph)))
-           (and (:abstraction morph) morph))] 
-    (apply list 
+           (and (:abstraction morph) morph))]
+    (apply list
       (or (-> c :abstraction :name)
-          (symbol (name (-> morph :type)))) 
+          (symbol (name (-> morph :type))))
       (-> (or c morph) :props)
       (into []
             (comp
@@ -332,26 +332,28 @@
              (map #(get-external-reconciliation state %)))
             (-> (or c morph) :submorphs)))))
 
-(defn get-description [state morph reconciler]
+(defn get-description [state morph reconciler cached-descriptions]
   (let [loc (-> morph :source-location)
         {:keys [reification submorph-locations type txs]} (get reconciler loc)
         ; _ (prn (-> morph :component-id) (-> morph :txs)  txs)
         ; the following automatically considers the expr reifications
-        get-sub-descriptions 
+        get-sub-descriptions
         (fn [submorph-refs]
           (let [submorphs (map #(get-in state %) submorph-refs)
-                loc->submorph-descriptions 
+                loc->submorph-descriptions
                 (into {}
                       (comp
                        (map #(loop [x' %]
                                (if (and (:owner x') (foreign? state morph x'))
                                  (recur (get-in state (:owner x')))
                                  [(:source-location x')
-                                  (get-description state x' reconciler)]))))
+                                  (get-description state x' reconciler cached-descriptions)]))))
                       submorphs)
-                own-descriptions 
+                _ (swap! cached-descriptions merge loc->submorph-descriptions)
+                loc->submorph-descriptions @cached-descriptions
+                own-descriptions
                 (map (fn [loc]
-                       (let [{:keys [reification submorph-locations type]} 
+                       (let [{:keys [reification submorph-locations type]}
                              (get reconciler loc)]
                          (case type
                            :morph (get loc->submorph-descriptions loc)
@@ -361,16 +363,15 @@
                                                          [(keyword (str "m_" (key entry)))
                                                           (val entry)]))
                                                   loc->submorph-descriptions)]
-                                   (reification args))))) 
+                                   (reification args)))))
                      submorph-locations)
                 added-submorphs (map #(get-in state %) (:added txs))
                 added-descriptions
-                (into [] 
+                (into []
                       (comp
                        (map (fn [m]
                               (when (foreign? state morph m)
-                                (get-external-reconciliation state m))))
-                       )
+                                (get-external-reconciliation state m)))))
                       added-submorphs)]
             (remove nil? (concat own-descriptions added-descriptions))))]
     (case type
@@ -381,7 +382,7 @@
 
 (defn get-component-def [state root-morph reconciler]
   (let [{:keys [reification submorph-locations type txs]} (get reconciler 0)
-        root-reconciliation (get-description state root-morph reconciler)]
+        root-reconciliation (get-description state root-morph reconciler (atom {}))]
     (if (= :expr type)
       (reification {:m_1 root-reconciliation})
       root-reconciliation)))
@@ -392,7 +393,7 @@
   If morph is not a root of a component,
   this falls back to an external reconciliation if the"
   [state morph]
-  (get-description state morph 
+  (get-description state morph
                    (-> state
                      (get-in (:owner morph))
-                     :reconciler)))
+                     :reconciler) (atom {})))
