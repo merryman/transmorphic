@@ -4,7 +4,7 @@
    [om.next :as om]
    [goog.dom :as gdom]
    [transmorphic.core :refer [universe eval-suspended-props ensure get-ref
-                              morph? component?]]
+                              morph? component? get-root]]
    [transmorphic.utils :refer [contains-rect? add-points]]
    [transmorphic.repl :refer [get-ns-source]]
    [transmorphic.manipulation]
@@ -228,13 +228,18 @@
 (defn morph-under-me 
   ([self]
    (morph-under-me self ($parent self) #{(-> self :morph-id)} true))
-  ([self {:keys [morph-id] :as current} ignoring ask-owner?]
-   (when current
-     (let [match (some (fn [{:keys [morph-id] :as submorph}]
-                         (when (not (contains? ignoring morph-id))
-                           (morph-under-me self submorph 
-                                           (conj ignoring morph-id) 
-                                           false)))
+  ([self {:keys [morph-id component-id] :as current} ignoring ask-owner?]
+   (when (and current (not= 'halo (-> current $owner :abstraction :name)))
+     (let [match (some (fn [{:keys [morph-id component-id] :as submorph}]
+                         (if morph-id
+                           (when (not (contains? ignoring morph-id))
+                             (morph-under-me self submorph 
+                                             (conj ignoring morph-id) 
+                                             false))
+                           (when (not (contains? ignoring component-id))
+                             (morph-under-me self (get-in @universe (get-root @universe submorph)) 
+                                             (conj ignoring component-id) 
+                                             false))))
                        (reverse ($submorphs current)))]
        (or match
            (when (contains-morph? current self)

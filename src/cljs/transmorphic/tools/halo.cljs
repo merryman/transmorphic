@@ -8,7 +8,7 @@
             [transmorphic.core :refer [rectangle image ellipse text get-ref
                                        rerender! move-morph! copy-morph! orphanize!
                                        remove-morph! set-prop! set-props! refresh-scene!
-                                       detach-cache!]]
+                                       detach-cache! get-root universe]]
             [transmorphic.tools.function-inspector :refer [inspected-morphs]]
             [transmorphic.tools.hand :refer [grab-morph! drop-morph! local-hand-name
                                              grab-component! drop-component!]]
@@ -116,19 +116,15 @@
   (render [{:keys [local-state] :as self} props _]
            (when (-> props :target)
              (let [copied-morph (-> local-state :updated-prop :copying)
-                   morph (or copied-morph ($morph (props :target)) ($morph (second (local-state :target))))
-                   component (when (:root? morph) ($owner morph))
+                   morph (or copied-morph ($morph (props :target)))
+                   component ($component (props :target))
                    target (or copied-morph
                               (when (-> component :reconciler :active?)
-                                morph)
+                                (get-in @universe (get-root @universe component)))
                               component
                               morph)
-                   halo-position (if component
-                                     (position-in-world component)
-                                     (position-in-world morph))
-                   bbx (compute-bounding-box (merge ($props morph) 
-                                                    (when component
-                                                      ($props component))))
+                   halo-position (position-in-world target)
+                   bbx (compute-bounding-box ($props target))
                    params {:start-editing (:start-editing props)
                            :start-updating #(do
                                               (detach-cache! target)
@@ -167,7 +163,7 @@
                           (rectangle {:id "visible-bounding-box"
                                       :extent (bbx :ext)
                                       :position (bbx :pos)
-                                      :border-color (if (:root? morph)
+                                      :border-color (if component
                                                       "blue"
                                                       "red") 
                                       :border-width 1}
@@ -182,8 +178,7 @@
                                        drag-button
                                        grab-button
                                        close-button
-                                       inspect-button
-                                       ])
+                                       inspect-button])
                                      (viewer params))
                           (if (-> self :local-state :scaling-mode)
                             (scaling-button params) 
@@ -406,14 +401,12 @@
                     :on-drag-start (fn [start-pos]
                                      (start-updating :grabbing)
                                      (if component
-                                       (let [new-root (grab-component! component)]
-                                           (update-target new-root))
+                                       (grab-component! component)
                                        (grab-morph! target)))
                     :on-drag-stop (fn [_] 
                                     (stop-updating)
                                     (if component
-                                      (let [new-root (drop-component! component)]
-                                           (update-target new-root))
+                                      (drop-component! component)
                                       (drop-morph! target)))}
                    (image {:position {:x -5 :y -5} 
                            :url "/media/halos/grabbinghand.svg" 
